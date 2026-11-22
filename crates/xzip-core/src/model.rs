@@ -359,6 +359,8 @@ pub struct Tune {
     pub m7: u8,
     /// side (neural) prediction also enters the final blend: raw + APM(c0,c1)
     pub sf: u8,
+    /// per-stream (1) instead of shared (0) indirect order-2 table
+    pub ind2s: u8,
 }
 
 impl Default for Tune {
@@ -383,6 +385,7 @@ impl Default for Tune {
             a5: 1,
             m7: 1,
             sf: 1,
+            ind2s: 0,
         }
     }
 }
@@ -413,6 +416,7 @@ impl Tune {
                 "a5" => t.a5 = f as u8,
                 "m7" => t.m7 = f as u8,
                 "sf" => t.sf = f as u8,
+                "ind2s" => t.ind2s = f as u8,
                 _ => return Err(format!("unknown tune key {k}")),
             }
         }
@@ -471,6 +475,7 @@ impl Default for ModelConfig {
 
 /// Per-stream context history (see `Model::switch_stream`).
 struct Hist {
+    ind2: Vec<u16>,
     lb: Vec<u8>,
     c8: u64,
     word: u64,
@@ -493,6 +498,7 @@ struct Hist {
 impl Hist {
     fn new() -> Self {
         Hist {
+            ind2: Vec::new(),
             lb: Vec::new(),
             c8: 0,
             word: 0,
@@ -827,6 +833,18 @@ impl Model {
         std::mem::swap(&mut self.dpre, &mut h.dpre);
         std::mem::swap(&mut self.seg, &mut h.seg);
         std::mem::swap(&mut self.seg_pos, &mut h.seg_pos);
+        if self.tune.ind2s != 0 {
+            // per-stream indirect table: park ours in the outgoing stream, take k's
+            // (`h` now holds stream k's parked history; the outgoing one is in saved)
+            let mine = std::mem::take(&mut self.ind2);
+            if let Some(Some(out)) = self.saved.get_mut(self.cur_stream) {
+                out.ind2 = mine;
+            }
+            self.ind2 = std::mem::take(&mut h.ind2);
+            if self.ind2.is_empty() {
+                self.ind2 = vec![0; 65536];
+            }
+        }
         self.cur_stream = k;
         for m in self.mm.iter_mut() {
             m.set_stream(k);

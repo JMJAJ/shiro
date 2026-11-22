@@ -89,6 +89,8 @@ pub fn eval_streams(
 ) -> EvalReport {
     let mut m = Model::new(cfg);
     let mut sw = switches.iter().peekable();
+    let mut rcs: Vec<regions::Classifier> = vec![regions::Classifier::new()];
+    let mut cur_k = 0usize;
     let mut rc = regions::Classifier::new();
     let mut rep = EvalReport {
         bytes: data.len() as u64,
@@ -103,6 +105,13 @@ pub fn eval_streams(
                 break;
             }
             m.switch_stream(k);
+            // the region classifier is stateful too: keep one per stream
+            if rcs.len() <= k {
+                rcs.resize_with(k + 1, regions::Classifier::new);
+            }
+            std::mem::swap(&mut rc, &mut rcs[cur_k]);
+            std::mem::swap(&mut rc, &mut rcs[k]);
+            cur_k = k;
             sw.next();
         }
         let r = rc.region() as usize;
