@@ -4,7 +4,7 @@ use xzip_core::{compress, decompress, eval, model::ModelConfig, regions};
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  xzip c <in> <out> [--bits N]\n  xzip d <in> <out>\n  xzip eval <in> [--bits N] [--log results.jsonl] [--note TEXT] [--rev SHA] [--side FILE]"
+        "usage:\n  xzip c <in> <out> [--bits N]\n  xzip d <in> <out>\n  xzip eval <in> [--bits N] [--log results.jsonl] [--note TEXT] [--rev SHA] [--side FILE] [--order FILE]"
     );
     std::process::exit(2)
 }
@@ -87,13 +87,41 @@ fn main() {
         }
         "eval" => {
             let path = &args[2];
-            let data = std::fs::read(path).expect("read input");
+            let mut data = std::fs::read(path).expect("read input");
             let n = data.len();
-            let side: Option<Vec<u16>> = flag(&args, "--side").map(|sp| {
+            let mut side: Option<Vec<u16>> = flag(&args, "--side").map(|sp| {
                 let raw = std::fs::read(&sp).expect("read side file");
                 assert_eq!(raw.len(), n * 16, "side file must hold 8 u16 per input byte");
                 raw.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect()
             });
+            // --order FILE: u64 LE (start, end) byte ranges, in the order a decoder would
+            // see them (e.g. the NN's block-interleaved stream schedule). Must cover every
+            // byte exactly once.
+            if let Some(op) = flag(&args, "--order") {
+                let raw = std::fs::read(&op).expect("read order file");
+                let mut seen = vec![false; n];
+                let mut nd = Vec::with_capacity(n);
+                let mut ns = side.as_ref().map(|_| Vec::with_capacity(n * 8));
+                for c in raw.chunks_exact(16) {
+                    let a = u64::from_le_bytes(c[..8].try_into().unwrap()) as usize;
+                    let b = u64::from_le_bytes(c[8..].try_into().unwrap()) as usize;
+                    assert!(a <= b && b <= n, "bad range {a}..{b}");
+                    for (i, s) in seen[a..b].iter_mut().enumerate() {
+                        assert!(!*s, "byte {} ordered twice", a + i);
+                        *s = true;
+                    }
+                    nd.extend_from_slice(&data[a..b]);
+                    if let (Some(v), Some(sd)) = (ns.as_mut(), side.as_ref()) {
+                        v.extend_from_slice(&sd[a * 8..b * 8]);
+                    }
+                }
+                assert!(seen.iter().all(|&s| s), "order file does not cover every byte");
+                eprintln!("order: {} ranges", raw.len() / 16);
+                data = nd;
+                if ns.is_some() {
+                    side = ns;
+                }
+            }
             let rep = eval(&data, &cfg, side.as_deref(), |pos, bits| {
                 let el = t0.elapsed().as_secs_f64();
                 eprint!(
