@@ -1,0 +1,6 @@
+enwik6|xz -9e -T1|290732|.344049262
+enwik6|zstd --ultra -22 --long=31 --single-thread|300162|.278544756
+enwik7|xz -9e -T1|2720256|5.633168926
+enwik7|zstd --ultra -22 --long=31 --single-thread|2793530|5.388272665
+enwik8|xz -9e -T1|24831648|85.946312514
+enwik8|zstd --ultra -22 --long=31 --single-thread|25273903|83.904244286
