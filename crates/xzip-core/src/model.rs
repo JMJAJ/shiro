@@ -1,4 +1,4 @@
-//! xzip CM model v3.
+//! xzip CM model v4.
 //!
 //! - Hashed contexts live in 64-byte checksummed buckets, one bucket per
 //!   (context, nibble): 15 bit-slots for the nibble's binary tree, plus a
@@ -302,6 +302,14 @@ pub struct Tune {
     pub limit_lo: u8,
     pub w0: f32,
     pub pmix: f32,
+    /// final mixer weight-set selection: 0 = bitpos, 1 = c0
+    pub m2sel: u8,
+    /// hash bits of the order-2 APM context (<= 12)
+    pub a3bits: u8,
+    /// enable the word-length-selected mixer
+    pub mw: u8,
+    /// learned final blend of mixer + APMs: 0 off, 1 replace, 2 average with fixed blend
+    pub fm: u8,
 }
 
 impl Default for Tune {
@@ -310,13 +318,17 @@ impl Default for Tune {
             lr_hi: 0.01,
             lr_lo: 0.0015,
             lr_t: 1_048_576.0,
-            m2_scale: 0.5,
+            m2_scale: 0.2,
             apm_rate: 0.02,
             inherit_n: 0,
             limit_hi: 127,
             limit_lo: 250,
             w0: 0.2,
             pmix: 0.25,
+            m2sel: 1,
+            a3bits: 12,
+            mw: 1,
+            fm: 2,
         }
     }
 }
@@ -338,6 +350,10 @@ impl Tune {
                 "limit_lo" => t.limit_lo = f as u8,
                 "w0" => t.w0 = f as f32,
                 "pmix" => t.pmix = f as f32,
+                "m2sel" => t.m2sel = f as u8,
+                "a3bits" => t.a3bits = (f as u8).min(12),
+                "mw" => t.mw = f as u8,
+                "fm" => t.fm = f as u8,
                 _ => return Err(format!("unknown tune key {k}")),
             }
         }
@@ -356,8 +372,10 @@ impl Tune {
 ///   14         word skip: word0 + word2
 ///   15         bracket: innermost open bracket type + depth + word0
 ///   16         line head: first two bytes of the line + c1
+///   17, 18     orders 12, 16
+///   19         indirect: the two bytes that followed the last two occurrences of c2c1, + c1
 const ORDERS: [u32; 7] = [1, 2, 3, 4, 5, 6, 8];
-const N_CTX: usize = 17;
+const N_CTX: usize = 20;
 /// per context: slot, indirect, run, confidence; + 2x2 match + bias
 const N_IN: usize = 4 * N_CTX + 4 + 1 + 2; // + side (neural) input, present flag
 
@@ -402,6 +420,7 @@ pub struct Model {
     prev_line_start: usize,
     brk: [u8; 16],
     brk_n: usize,
+    ind2: Vec<u16>,
     ctx: [u64; N_CTX],
     tables: Vec<Vec<Bucket>>,
     tbits: [u32; N_CTX],
@@ -424,11 +443,14 @@ pub struct Model {
     mm: [MatchModel; 2],
     // mixing
     x: [f32; N_IN],
-    m1: [Mixer; 6],
-    x2: [f32; 8],
+    m1: [Mixer; 7],
+    x2: [f32; 9],
+    wlen: usize,
     side: u16,
     side_st: f32,
     m2: Mixer,
+    fmx: Mixer,
+    xf: [f32; 6],
     a1: Apm,
     a2: Apm,
     a3: Apm,
@@ -467,6 +489,7 @@ impl Model {
             prev_line_start: 0,
             brk: [0; 16],
             brk_n: 0,
+            ind2: vec![0; 65536],
             ctx: [0; N_CTX],
             tables,
             tbits,
@@ -492,14 +515,18 @@ impl Model {
                 Mixer::new(N_IN, 64, w0),
                 Mixer::new(N_IN, 512, w0),
                 Mixer::new(N_IN, 33 * 8, w0),
+                Mixer::new(N_IN, 16 * 8 * 8, w0),
             ],
-            x2: [0.0; 8],
+            x2: [0.0; 9],
+            wlen: 0,
             side: 0,
             side_st: 0.0,
-            m2: Mixer::new(8, 8, 0.15),
+            m2: Mixer::new(9, 256, 0.15),
+            fmx: Mixer::new(6, 256, 0.2),
+            xf: [0.0; 6],
             a1: Apm::new(256, ar),
             a2: Apm::new(65536, ar),
-            a3: Apm::new(65536, ar),
+            a3: Apm::new(1 << 20, ar),
             a4: Apm::new(65 * 256, ar),
             a3ctx: 0,
             bits_seen: 0,
@@ -551,7 +578,20 @@ impl Model {
             0
         };
         self.ctx[16] = hash2((head << 8) | (self.c8 & 0xff), 111);
-        self.a3ctx = (hash2(self.c8 & 0xffff, 106) >> 56) as usize;
+        let n = self.buf.len();
+        let mut h12 = 0u64;
+        for &c in &self.buf[n.saturating_sub(12)..] {
+            h12 = h12.wrapping_mul(0x100_0000_01B3).wrapping_add(c as u64 + 1);
+        }
+        let mut h16 = h12;
+        for &c in &self.buf[n.saturating_sub(16)..n.saturating_sub(12)] {
+            h16 = h16.wrapping_mul(0x100_0000_01B3).wrapping_add(c as u64 + 7);
+        }
+        self.ctx[17] = hash2(h12, 112);
+        self.ctx[18] = hash2(h16, 113);
+        let iv = self.ind2[(self.c8 & 0xffff) as usize] as u64;
+        self.ctx[19] = hash2((iv << 8) | (self.c8 & 0xff), 114);
+        self.a3ctx = (hash2(self.c8 & 0xffff, 106) >> (64 - self.tune.a3bits as u32)) as usize;
     }
 
     /// Look up (or allocate) the bucket of every context for the current nibble.
@@ -647,8 +687,15 @@ impl Model {
         let cls = cclass(c1 as u8) * 8 + cclass((self.c8 >> 8) as u8);
         let d4 = self.m1[4].predict(&self.x, cls * 8 + self.bitpos as usize);
         let d5 = self.m1[5].predict(&self.x, ssel * 8 + self.bitpos as usize);
-        self.x2 = [d0, d1, d2, d3, d4, d5, self.side_st, 0.5];
-        let d = self.m2.predict(&self.x2, self.bitpos as usize);
+        let d6 = if self.tune.mw != 0 {
+            let ws = (self.wlen.min(15) * 8 + cclass(c1 as u8)) * 8 + self.bitpos as usize;
+            self.m1[6].predict(&self.x, ws)
+        } else {
+            0.0
+        };
+        self.x2 = [d0, d1, d2, d3, d4, d5, d6, self.side_st, 0.5];
+        let s2 = if self.tune.m2sel == 1 { c0 } else { self.bitpos as usize };
+        let d = self.m2.predict(&self.x2, s2);
         let pm = self.m2.pr;
         let pa1 = self.a1.predict(d, c0);
         let pa2 = self.a2.predict(d, c0 | (c1 << 8));
@@ -656,7 +703,14 @@ impl Model {
         let pa4 = self.a4.predict(d, c0 | (msel.min(64) << 8));
         let pmx = self.tune.pmix;
         let r = 1.0 - pmx;
-        let p = pmx * pm + r * (0.2 * pa1 + 0.27 * pa2 + 0.33 * pa3 + 0.2 * pa4);
+        let mut p = pmx * pm + r * (0.2 * pa1 + 0.27 * pa2 + 0.33 * pa3 + 0.2 * pa4);
+        if self.tune.fm != 0 {
+            let st = |q: f32| dmath::stretch(q.clamp(1e-6, 1.0 - 1e-6) as f64) as f32;
+            self.xf = [st(pm), st(pa1), st(pa2), st(pa3), st(pa4), 0.5];
+            self.fmx.predict(&self.xf, c0);
+            let q = self.fmx.pr;
+            p = if self.tune.fm == 1 { q } else { 0.5 * (p + q) };
+        }
         let p24 = (p as f64 * (1u64 << PBITS) as f64) as i64;
         p24.clamp(1, PMAX as i64) as u32
     }
@@ -681,10 +735,14 @@ impl Model {
         let tn = &self.tune;
         let lr = tn.lr_lo + tn.lr_hi / (1.0 + self.bits_seen as f32 / tn.lr_t);
         let m2lr = lr * tn.m2_scale;
-        for m in self.m1.iter_mut() {
+        let nm = if self.tune.mw != 0 { 7 } else { 6 };
+        for m in self.m1[..nm].iter_mut() {
             m.update(&self.x, bit, lr);
         }
         self.m2.update(&self.x2, bit, m2lr);
+        if self.tune.fm != 0 {
+            self.fmx.update(&self.xf, bit, m2lr * 0.5);
+        }
         self.a1.update(bit);
         self.a2.update(bit);
         self.a3.update(bit);
@@ -717,6 +775,8 @@ impl Model {
             }
         }
 
+        let k2 = (self.c8 & 0xffff) as usize;
+        self.ind2[k2] = (self.ind2[k2] << 8) | b as u16;
         self.buf.push(b);
         let pos = self.buf.len();
         self.c8 = (self.c8 << 8) | b as u64;
@@ -746,7 +806,9 @@ impl Model {
         let is_letter = b.is_ascii_alphabetic() || b >= 128;
         if is_letter {
             self.word = hash2(self.word, b.to_ascii_lowercase() as u64 + 1);
+            self.wlen += 1;
         } else if self.word != 0 {
+            self.wlen = 0;
             self.prevword2 = self.prevword;
             self.prevword = self.word;
             self.word = 0;

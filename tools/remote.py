@@ -7,7 +7,7 @@
     python tools/remote.py log <name> [lines]   # tail that log
     python tools/remote.py get <remote> <local> # fetch a file
 
-Connection comes from env: XZIP_HOST, XZIP_USER, XZIP_PASS (password is never
+Connection comes from env: XZIP_HOST, XZIP_USER, XZIP_PASS, XZIP_DIR (default xzip) (password is never
 written to disk). Requires paramiko.
 """
 import io
@@ -19,7 +19,7 @@ import tarfile
 import paramiko
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-REMOTE_DIR = "xzip"
+REMOTE_DIR = os.environ.get("XZIP_DIR", "xzip")
 EXCLUDE_DIRS = {"target", "data", ".git", "__pycache__", "logs"}
 
 
