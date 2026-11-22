@@ -183,17 +183,33 @@ impl Apm {
 
 // ---------- match model ----------
 
+/// Per-stream match state: where the current match's source is (stream, position of
+/// the predicted byte), its length, and the predicted byte itself.
+#[derive(Clone, Copy, Default)]
+struct MState {
+    pst: usize,
+    ptr: usize,
+    len: usize,
+    pb: u8,
+}
+
+/// Match model over per-stream histories. The hash table holds (stream, position)
+/// candidates from *every* stream, so a match can come from another stream's past
+/// (global match memory), but it is verified and followed along its own stream's
+/// byte order. With a single stream this is the classic match model.
 struct MatchModel {
     minlen: usize,
     bits: u32,
-    tab: Vec<u32>,
-    ptr: usize,
-    len: usize,
+    tab: Vec<u64>,
+    st: Vec<MState>,
+    cur: usize,
     alive: bool,
     exp: u32,
     bucket: usize,
     cnt: Vec<Slot>,
 }
+
+const POS_BITS: u32 = 40;
 
 impl MatchModel {
     fn new(minlen: usize, bits: u32) -> Self {
@@ -201,13 +217,20 @@ impl MatchModel {
             minlen,
             bits,
             tab: vec![0; 1 << bits],
-            ptr: 0,
-            len: 0,
+            st: vec![MState::default()],
+            cur: 0,
             alive: false,
             exp: 0,
             bucket: 0,
             cnt: vec![SLOT0; 64],
         }
+    }
+
+    fn set_stream(&mut self, k: usize) {
+        if self.st.len() <= k {
+            self.st.resize(k + 1, MState::default());
+        }
+        self.cur = k;
     }
 
     fn len_bucket(len: usize) -> usize {
@@ -220,14 +243,15 @@ impl MatchModel {
 
     /// Writes 2 inputs; returns mixer-select value (0 = no match, else 1..=63).
     #[inline]
-    fn predict(&mut self, buf: &[u8], c0: u32, bitpos: u32, t: &Tables, x: &mut [f32]) -> usize {
+    fn predict(&mut self, c0: u32, bitpos: u32, t: &Tables, x: &mut [f32]) -> usize {
         self.alive = false;
-        if self.len > 0 {
-            let pb = buf[self.ptr] as u32;
+        let s = self.st[self.cur];
+        if s.len > 0 {
+            let pb = s.pb as u32;
             if ((pb | 256) >> (8 - bitpos)) == c0 {
                 self.alive = true;
                 self.exp = (pb >> (7 - bitpos)) & 1;
-                self.bucket = Self::len_bucket(self.len);
+                self.bucket = Self::len_bucket(s.len);
             }
         }
         if self.alive {
@@ -250,38 +274,54 @@ impl MatchModel {
         }
     }
 
-    fn end_byte(&mut self, buf: &[u8]) {
-        let pos = buf.len();
-        let b = buf[pos - 1];
-        if self.len > 0 {
-            if buf[self.ptr] == b {
-                self.len += 1;
-                self.ptr += 1;
+    /// `get(k)` = history of stream k; the current stream's history already ends
+    /// with the byte just coded.
+    fn end_byte<'a>(&mut self, get: &impl Fn(usize) -> &'a [u8]) {
+        let k = self.cur;
+        let cur = get(k);
+        let pos = cur.len();
+        let b = cur[pos - 1];
+        let mut s = self.st[k];
+        if s.len > 0 {
+            if s.pb == b {
+                s.len += 1;
+                s.ptr += 1;
+                let src = get(s.pst);
+                if s.ptr < src.len() {
+                    s.pb = src[s.ptr];
+                } else {
+                    s.len = 0;
+                }
             } else {
-                self.len = 0;
+                s.len = 0;
             }
         }
         if pos >= self.minlen {
             let mut h = self.minlen as u64;
-            for &c in &buf[pos - self.minlen..pos] {
+            for &c in &cur[pos - self.minlen..pos] {
                 h = hash2(h, c as u64 + 1);
             }
             let hi = (h >> (64 - self.bits)) as usize;
-            if self.len == 0 {
-                let cand = self.tab[hi] as usize;
-                if cand > 0 {
-                    let mut l = 0;
-                    while l < 400 && cand > l && buf[cand - 1 - l] == buf[pos - 1 - l] {
-                        l += 1;
-                    }
-                    if l >= self.minlen {
-                        self.len = l;
-                        self.ptr = cand;
+            if s.len == 0 {
+                let e = self.tab[hi];
+                if e > 0 {
+                    let cst = (e >> POS_BITS) as usize;
+                    let cpos = (e & ((1u64 << POS_BITS) - 1)) as usize;
+                    let cb = get(cst);
+                    if cpos < cb.len() {
+                        let mut l = 0;
+                        while l < 400 && cpos > l && l < pos && cb[cpos - 1 - l] == cur[pos - 1 - l] {
+                            l += 1;
+                        }
+                        if l >= self.minlen {
+                            s = MState { pst: cst, ptr: cpos, len: l, pb: cb[cpos] };
+                        }
                     }
                 }
             }
-            self.tab[hi] = pos as u32;
+            self.tab[hi] = ((k as u64) << POS_BITS) | pos as u64;
         }
+        self.st[k] = s;
     }
 }
 
@@ -477,8 +517,7 @@ impl Hist {
 pub struct Model {
     t: Tables,
     tune: Tune,
-    buf: Vec<u8>,
-    /// context history of the current stream (== buf unless streams are switched)
+    /// byte history of the current stream (the whole input unless streams are switched)
     lb: Vec<u8>,
     cur_stream: usize,
     saved: Vec<Option<Hist>>,
@@ -561,7 +600,6 @@ impl Model {
         let ar = tune.apm_rate;
         let mut m = Model {
             t: Tables::new(),
-            buf: Vec::new(),
             lb: Vec::new(),
             cur_stream: 0,
             saved: Vec::new(),
@@ -790,6 +828,9 @@ impl Model {
         std::mem::swap(&mut self.seg, &mut h.seg);
         std::mem::swap(&mut self.seg_pos, &mut h.seg_pos);
         self.cur_stream = k;
+        for m in self.mm.iter_mut() {
+            m.set_stream(k);
+        }
         self.byte_contexts();
         self.nibble_lookup(true);
     }
@@ -836,8 +877,8 @@ impl Model {
 
         let mi = 4 * N_CTX;
         let (xa, xb) = self.x[mi..mi + 4].split_at_mut(2);
-        let s0 = self.mm[0].predict(&self.buf, self.c0, self.bitpos, &self.t, xa);
-        let s1 = self.mm[1].predict(&self.buf, self.c0, self.bitpos, &self.t, xb);
+        let s0 = self.mm[0].predict(self.c0, self.bitpos, &self.t, xa);
+        let s1 = self.mm[1].predict(self.c0, self.bitpos, &self.t, xb);
         self.x[mi + 4] = 0.5;
         let present = self.side != 0;
         self.side_st = if present { self.t.st16(self.side) } else { 0.0 };
@@ -963,7 +1004,6 @@ impl Model {
 
         let k2 = (self.c8 & 0xffff) as usize;
         self.ind2[k2] = (self.ind2[k2] << 8) | b as u16;
-        self.buf.push(b);
         self.lb.push(b);
         let pos = self.lb.len();
         self.c8 = (self.c8 << 8) | b as u64;
@@ -1031,8 +1071,20 @@ impl Model {
             self.word = 0;
         }
 
-        for m in self.mm.iter_mut() {
-            m.end_byte(&self.buf);
+        {
+            let lb = &self.lb;
+            let saved = &self.saved;
+            let cs = self.cur_stream;
+            let get = |k: usize| -> &[u8] {
+                if k == cs {
+                    &lb[..]
+                } else {
+                    saved[k].as_ref().map(|h| &h.lb[..]).unwrap_or(&[])
+                }
+            };
+            for m in self.mm.iter_mut() {
+                m.end_byte(&get);
+            }
         }
         self.byte_contexts();
     }
