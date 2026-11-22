@@ -1,4 +1,4 @@
-//! xzip CM model v2.
+//! xzip CM model v3.
 //!
 //! - Hashed contexts live in 64-byte checksummed buckets, one bucket per
 //!   (context, nibble): 15 bit-slots for the nibble's binary tree, plus a
@@ -312,7 +312,7 @@ impl Default for Tune {
             lr_t: 1_048_576.0,
             m2_scale: 0.5,
             apm_rate: 0.02,
-            inherit_n: 2,
+            inherit_n: 0,
             limit_hi: 127,
             limit_lo: 250,
             w0: 0.2,
@@ -353,9 +353,28 @@ impl Tune {
 ///   8, 9, 10   word, word bigram, word trigram
 ///   11, 12     sparse: byte 2; bytes 2..3
 ///   13         column: byte above in previous line + c1
+///   14         word skip: word0 + word2
+///   15         bracket: innermost open bracket type + depth + word0
+///   16         line head: first two bytes of the line + c1
 const ORDERS: [u32; 7] = [1, 2, 3, 4, 5, 6, 8];
-const N_CTX: usize = 14;
-const N_IN: usize = 3 * N_CTX + 4 + 1;
+const N_CTX: usize = 17;
+/// per context: slot, indirect, run, confidence; + 2x2 match + bias
+const N_IN: usize = 4 * N_CTX + 4 + 1;
+
+/// Coarse character class used for mixer selection.
+#[inline]
+fn cclass(b: u8) -> usize {
+    match b {
+        b'a'..=b'z' => 1,
+        b'A'..=b'Z' => 2,
+        b'0'..=b'9' => 3,
+        b'.' | b',' | b';' | b':' | b'!' | b'?' => 4,
+        b'[' | b']' | b'{' | b'}' | b'<' | b'>' | b'|' | b'=' => 5,
+        128..=255 => 7,
+        0..=32 => 0,
+        _ => 6,
+    }
+}
 
 pub struct ModelConfig {
     /// log2 of buckets per hashed table (64 bytes each).
@@ -381,6 +400,8 @@ pub struct Model {
     prevword2: u64,
     line_start: usize,
     prev_line_start: usize,
+    brk: [u8; 16],
+    brk_n: usize,
     ctx: [u64; N_CTX],
     tables: Vec<Vec<Bucket>>,
     tbits: [u32; N_CTX],
@@ -403,8 +424,8 @@ pub struct Model {
     mm: [MatchModel; 2],
     // mixing
     x: [f32; N_IN],
-    m1: [Mixer; 4],
-    x2: [f32; 5],
+    m1: [Mixer; 5],
+    x2: [f32; 6],
     m2: Mixer,
     a1: Apm,
     a2: Apm,
@@ -442,6 +463,8 @@ impl Model {
             prevword2: 0,
             line_start: 0,
             prev_line_start: 0,
+            brk: [0; 16],
+            brk_n: 0,
             ctx: [0; N_CTX],
             tables,
             tbits,
@@ -465,9 +488,10 @@ impl Model {
                 Mixer::new(N_IN, 64, w0),
                 Mixer::new(N_IN, 256, w0),
                 Mixer::new(N_IN, 64, w0),
+                Mixer::new(N_IN, 512, w0),
             ],
-            x2: [0.0; 5],
-            m2: Mixer::new(5, 8, 0.25),
+            x2: [0.0; 6],
+            m2: Mixer::new(6, 8, 0.2),
             a1: Apm::new(256, ar),
             a2: Apm::new(65536, ar),
             a3: Apm::new(65536, ar),
@@ -493,7 +517,12 @@ impl Model {
             self.ctx[k + 1] = hash2(self.c8 & mask, o as u64 + 1);
         }
         let w1 = self.prevword.wrapping_mul(0x2545_F491_4F6C_DD1D);
-        self.ctx[8] = hash2(self.word, 101);
+        // between words, condition on the previous word and the delimiter
+        self.ctx[8] = if self.word != 0 {
+            hash2(self.word, 101)
+        } else {
+            hash2(self.prevword ^ (self.c8 & 0xff), 108)
+        };
         self.ctx[9] = hash2(self.word ^ w1, 102);
         self.ctx[10] = hash2(self.word ^ w1 ^ self.prevword2.wrapping_mul(0x9FB2_1C65_1E98_DF25), 107);
         self.ctx[11] = hash2(self.c8 & 0xff00, 103);
@@ -506,6 +535,17 @@ impl Model {
             0
         };
         self.ctx[13] = hash2((above << 8) | (self.c8 & 0xff), 105);
+        self.ctx[14] = hash2(self.word ^ self.prevword2.wrapping_mul(0x9FB2_1C65_1E98_DF25), 109);
+        let top = if self.brk_n > 0 { self.brk[(self.brk_n - 1).min(15)] as u64 } else { 0 };
+        self.ctx[15] = hash2(self.word ^ (top << 56) ^ ((self.brk_n.min(7) as u64) << 48), 110);
+        let head = if col >= 2 {
+            ((self.buf[self.line_start] as u64) << 8) | self.buf[self.line_start + 1] as u64
+        } else if col == 1 {
+            self.buf[self.line_start] as u64
+        } else {
+            0
+        };
+        self.ctx[16] = hash2((head << 8) | (self.c8 & 0xff), 111);
         self.a3ctx = (hash2(self.c8 & 0xffff, 106) >> 56) as usize;
     }
 
@@ -571,9 +611,10 @@ impl Model {
                 self.ralive[i] = false;
                 self.x[2 * N_CTX + i] = 0.0;
             }
+            self.x[3 * N_CTX + i] = (s.p as f32 - 32768.0) * (1.0 / 16384.0);
         }
 
-        let mi = 3 * N_CTX;
+        let mi = 4 * N_CTX;
         let (xa, xb) = self.x[mi..mi + 4].split_at_mut(2);
         let s0 = self.mm[0].predict(&self.buf, self.c0, self.bitpos, &self.t, xa);
         let s1 = self.mm[1].predict(&self.buf, self.c0, self.bitpos, &self.t, xb);
@@ -586,7 +627,9 @@ impl Model {
         let d1 = self.m1[1].predict(&self.x, msel.min(63));
         let d2 = self.m1[2].predict(&self.x, c1);
         let d3 = self.m1[3].predict(&self.x, self.hits * 8 + self.bitpos as usize);
-        self.x2 = [d0, d1, d2, d3, 0.5];
+        let cls = cclass(c1 as u8) * 8 + cclass((self.c8 >> 8) as u8);
+        let d4 = self.m1[4].predict(&self.x, cls * 8 + self.bitpos as usize);
+        self.x2 = [d0, d1, d2, d3, d4, 0.5];
         let d = self.m2.predict(&self.x2, self.bitpos as usize);
         let pm = self.m2.pr;
         let pa1 = self.a1.predict(d, c0);
@@ -661,6 +704,24 @@ impl Model {
         if b == b'\n' {
             self.prev_line_start = self.line_start;
             self.line_start = pos;
+        }
+        match b {
+            b'[' | b'{' | b'<' | b'(' => {
+                if self.brk_n < 16 {
+                    self.brk[self.brk_n] = b;
+                }
+                self.brk_n += 1;
+            }
+            b']' | b'}' | b'>' | b')' => {
+                self.brk_n = self.brk_n.saturating_sub(1);
+            }
+            b'\n' if self.brk_n > 0 && self.brk_n <= 16 && self.brk[self.brk_n - 1] == b'(' => {
+                self.brk_n -= 1;
+            }
+            _ => {}
+        }
+        if self.brk_n > 64 {
+            self.brk_n = 0;
         }
 
         let is_letter = b.is_ascii_alphabetic() || b >= 128;
