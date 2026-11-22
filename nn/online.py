@@ -118,7 +118,19 @@ class Marginaliser:
         self.u_letter = letter.float() * (0.7 / letter.sum())
 
     @torch.no_grad()
-    def bits(self, logits, qlogits, rtok, rnode, rkind, rfirst, rbyte):
+    def bits(self, logits, qlogits, rtok, rnode, rkind, rfirst, rbyte, chunk=1024):
+        """Chunked over token rows to bound GPU memory."""
+        out = torch.empty(rtok.shape[0], 8, device=self.dev, dtype=torch.int32)
+        for r0 in range(0, logits.shape[0], chunk):
+            r1 = min(r0 + chunk, logits.shape[0])
+            sel = torch.nonzero((rtok >= r0) & (rtok < r1)).squeeze(1)
+            if sel.numel() == 0:
+                continue
+            out[sel] = self._bits(logits[r0:r1], qlogits[r0:r1], rtok[sel] - r0, rnode[sel],
+                                  rkind[sel], rfirst[sel], rbyte[sel])
+        return out
+
+    def _bits(self, logits, qlogits, rtok, rnode, rkind, rfirst, rbyte):
         """logits [M, V] (rows = token positions referenced by records),
         rtok indexes those rows. Returns uint16 [R, 8]."""
         P = torch.softmax(logits.float(), -1)
