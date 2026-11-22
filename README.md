@@ -16,8 +16,8 @@ This page is the story so far: what was tried, what moved the number, what didn'
 | CM v3 (end of day 1) | 1,993,246 | 18,160,029 |
 | Transformer only (online, 23M params) | 2,526,495 | 19,438,897 |
 | **CM v3 + transformer, fused** | **1,938,957** | **16,841,487** |
-| CM v4.2 (today, CM only) | 1,961,099 | *running* |
-| CM v4.2 + transformer, 2 training passes per batch | | *running* |
+| CM v4.2 (today, CM only) | 1,961,099 | 17,780,730 |
+| **CM v4.2 + transformer** (2 passes/batch, B = 24) | | **16,637,907** |
 
 **Read these numbers with care.** The sizes are the model's code length on the file, Σ −log₂ p over every bit. They are not yet the size of an archive that decompresses and is counted with its decompressor. The CM alone already round-trips through a real arithmetic coder with bit-exact deterministic math. The hybrid does not yet: a decoder would have to replay the GPU training exactly, and getting that deterministic is still to do. Until then, hybrid numbers are research numbers.
 
@@ -92,7 +92,7 @@ Two goals: a stronger CM partner, and faster ways to test fusion.
 | v3 | (baseline) | 1,993,246 | 18,160,029 |
 | v4 | orders 12 and 16; indirect order-2 context; final mixer selected by the partial byte; word-length mixer; 12-bit order-2 APM; learned final blend | 1,972,579 | 17,926,130 |
 | v4.1 | XML-tag, number, sparse 1+3 and markup-segment contexts; history map indexed by confidence; order-3 APM | 1,963,772 | 17,835,443 |
-| v4.2 | a mixer whose weights are selected by the previous two bytes (65,536 weight sets) | 1,961,099 | *running* |
+| v4.2 | a mixer whose weights are selected by the previous two bytes (65,536 weight sets) | 1,961,099 | 17,780,730 |
 
 **What landed.**
 
@@ -135,7 +135,15 @@ Both point the same way: a small online model is starved of updates, not of capa
 
 - **First crash.** The first pass's activations were still in memory while the second pass ran. Fixed by freeing them between passes.
 - **Second crash.** The quick test after the fix ran without the side-output step, so it missed that this step also needs memory. At B = 32 the single-pass run already peaked at 7.2 GB of 7.57 GB, so a second pass can't fit.
-- **The run now going** uses B = 24, about 60 min of GPU.
+- **The run that worked** used B = 24, 45 min of GPU.
+
+**And then it didn't carry over.** On enwik8, 2 passes at B = 24 gave **19,447,822** NN-only: the same as 1 pass at B = 32 (19,438,897). The −3.3% from enwik7 vanished. Two guesses, not yet separated:
+- The gain on enwik7 was mostly early-training speed-up, and on a 10× longer file the single-pass model catches up.
+- The lost streams (32 → 24) and the second pass cancel each other.
+
+A cheap test is 2 passes on only the first 20% of the file. Even so, fused with CM v4.2 it set the new best: **16,637,907** (1.331 bpc).
+
+**The CM and the transformer overlap more than before.** CM v3 → v4.2 cut the CM by 2.1%, but the fused result improved by only 1.2%. Some of the new contexts (orders 12/16, markup segments) catch patterns the transformer was already supplying. The transformer's share of the gain went from 7.3% to 6.4%.
 
 Lesson logged: smoke tests must use the exact production flags, and job watchers must stop on errors, not only on success. One crash sat unnoticed for close to two hours.
 
