@@ -47,7 +47,14 @@ fn main() {
         usage();
     }
     let bits = flag(&args, "--bits").map(|v| v.parse().expect("--bits")).unwrap_or(ModelConfig::default().table_bits);
-    let cfg = ModelConfig { table_bits: bits };
+    let mut cfg = ModelConfig { table_bits: bits, ..Default::default() };
+    let tune_spec = std::env::var("XZIP_TUNE").unwrap_or_default();
+    if args[1] == "eval" && !tune_spec.is_empty() {
+        cfg.tune = xzip_core::model::Tune::parse(&tune_spec).unwrap_or_else(|e| {
+            eprintln!("XZIP_TUNE: {e}");
+            std::process::exit(2)
+        });
+    }
     let t0 = Instant::now();
     match args[1].as_str() {
         "c" => {
@@ -118,7 +125,7 @@ fn main() {
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
                 let line = format!(
-                    "{{\"ts\":{},\"rev\":{},\"note\":{},\"file\":{},\"in\":{},\"out\":{:.0},\"bpc\":{:.5},\"secs\":{:.1},\"rss_mb\":{:.0},\"cfg\":{{\"bits\":{}}},\"regions\":{{{}}}}}\n",
+                    "{{\"ts\":{},\"rev\":{},\"note\":{},\"file\":{},\"in\":{},\"out\":{:.0},\"bpc\":{:.5},\"secs\":{:.1},\"rss_mb\":{:.0},\"cfg\":{{\"bits\":{},\"tune\":{}}},\"regions\":{{{}}}}}\n",
                     ts,
                     json_str(&flag(&args, "--rev").unwrap_or_default()),
                     json_str(&flag(&args, "--note").unwrap_or_default()),
@@ -129,6 +136,7 @@ fn main() {
                     secs,
                     peak_rss_mb(),
                     bits,
+                    json_str(&tune_spec),
                     regions_json.join(",")
                 );
                 let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&log).expect("open log");

@@ -1,11 +1,12 @@
-//! xzip CM model v1.
+//! xzip CM model v2.
 //!
 //! - Hashed contexts live in 64-byte checksummed buckets, one bucket per
 //!   (context, nibble): 15 bit-slots for the nibble's binary tree, plus a
 //!   per-context byte "run" record (last byte seen in this context, repeat count).
 //! - New high-order buckets inherit their parent order's slot probabilities
 //!   (PPM information inheritance, ALGORITHMS.md §D6).
-//! - Inputs: slot stretch, run-model prediction per context, match model, bias.
+//! - Inputs per context: slot stretch, indirect (bit-history) map, run model.
+//!   Plus two match models (short / long minimum length) and a bias.
 //! - Mixing: 4 context-selected logistic mixers -> final mixer -> APM chain.
 //!
 //! Determinism: integer counters, f32 arithmetic in fixed order, `dmath` exp/ln.
@@ -51,13 +52,14 @@ fn squash32(x: f32) -> f32 {
 #[derive(Clone, Copy)]
 struct Slot {
     p: u16, // P(1) * 65536
-    n: u16, // hit count (adaptation-rate state)
+    n: u8,  // hit count (adaptation-rate state)
+    h: u8,  // bit history in this slot, marker-prefixed (1 = empty), last <=7 bits
 }
 
-const SLOT0: Slot = Slot { p: 32768, n: 0 };
+const SLOT0: Slot = Slot { p: 32768, n: 0, h: 1 };
 
 #[inline]
-fn slot_update(s: &mut Slot, bit: u32, t: &Tables, limit: u16) {
+fn slot_update(s: &mut Slot, bit: u32, t: &Tables, limit: u8) {
     let target: i32 = if bit != 0 { 65535 } else { 0 };
     let p = s.p as i32;
     let r = t.rate[s.n as usize] as i64;
@@ -66,6 +68,8 @@ fn slot_update(s: &mut Slot, bit: u32, t: &Tables, limit: u16) {
     if s.n < limit {
         s.n += 1;
     }
+    let h = ((s.h as u32) << 1) | bit;
+    s.h = if h >= 256 { ((h & 0x7f) | 0x80) as u8 } else { h as u8 };
 }
 
 // ---------- hashed bucket table ----------
@@ -95,7 +99,7 @@ fn lookup(tab: &mut [Bucket], bits: u32, h: u64) -> (usize, bool) {
         if b.chk == chk {
             return (ix, false);
         }
-        let pr = if b.chk == 0 { 0 } else { b.s[0].n + 1 };
+        let pr = if b.chk == 0 { 0 } else { b.s[0].n as u16 + 1 };
         if pr < vp {
             vp = pr;
             victim = ix;
@@ -178,40 +182,203 @@ impl Apm {
     }
 }
 
+// ---------- match model ----------
+
+struct MatchModel {
+    minlen: usize,
+    bits: u32,
+    tab: Vec<u32>,
+    ptr: usize,
+    len: usize,
+    alive: bool,
+    exp: u32,
+    bucket: usize,
+    cnt: Vec<Slot>,
+}
+
+impl MatchModel {
+    fn new(minlen: usize, bits: u32) -> Self {
+        MatchModel {
+            minlen,
+            bits,
+            tab: vec![0; 1 << bits],
+            ptr: 0,
+            len: 0,
+            alive: false,
+            exp: 0,
+            bucket: 0,
+            cnt: vec![SLOT0; 64],
+        }
+    }
+
+    fn len_bucket(len: usize) -> usize {
+        if len < 16 {
+            len
+        } else {
+            (16 + (len - 16) / 8).min(31)
+        }
+    }
+
+    /// Writes 2 inputs; returns mixer-select value (0 = no match, else 1..=63).
+    #[inline]
+    fn predict(&mut self, buf: &[u8], c0: u32, bitpos: u32, t: &Tables, x: &mut [f32]) -> usize {
+        self.alive = false;
+        if self.len > 0 {
+            let pb = buf[self.ptr] as u32;
+            if ((pb | 256) >> (8 - bitpos)) == c0 {
+                self.alive = true;
+                self.exp = (pb >> (7 - bitpos)) & 1;
+                self.bucket = Self::len_bucket(self.len);
+            }
+        }
+        if self.alive {
+            let s = t.st16(self.cnt[self.bucket].p);
+            let sign = if self.exp != 0 { 1.0 } else { -1.0 };
+            x[0] = s * sign;
+            x[1] = sign * self.bucket as f32 * 0.0625;
+            1 + self.bucket * 2 + self.exp as usize
+        } else {
+            x[0] = 0.0;
+            x[1] = 0.0;
+            0
+        }
+    }
+
+    #[inline]
+    fn update(&mut self, bit: u32, t: &Tables) {
+        if self.alive {
+            slot_update(&mut self.cnt[self.bucket], (bit == self.exp) as u32, t, 255);
+        }
+    }
+
+    fn end_byte(&mut self, buf: &[u8]) {
+        let pos = buf.len();
+        let b = buf[pos - 1];
+        if self.len > 0 {
+            if buf[self.ptr] == b {
+                self.len += 1;
+                self.ptr += 1;
+            } else {
+                self.len = 0;
+            }
+        }
+        if pos >= self.minlen {
+            let mut h = self.minlen as u64;
+            for &c in &buf[pos - self.minlen..pos] {
+                h = hash2(h, c as u64 + 1);
+            }
+            let hi = (h >> (64 - self.bits)) as usize;
+            if self.len == 0 {
+                let cand = self.tab[hi] as usize;
+                if cand > 0 {
+                    let mut l = 0;
+                    while l < 400 && cand > l && buf[cand - 1 - l] == buf[pos - 1 - l] {
+                        l += 1;
+                    }
+                    if l >= self.minlen {
+                        self.len = l;
+                        self.ptr = cand;
+                    }
+                }
+            }
+            self.tab[hi] = pos as u32;
+        }
+    }
+}
+
+// ---------- tuning knobs ----------
+
+/// Research knobs. Archives always use `Tune::default()`; `eval` may override
+/// via `XZIP_TUNE="key=val,key=val"` for parameter sweeps.
+#[derive(Clone, Debug)]
+pub struct Tune {
+    pub lr_hi: f32,
+    pub lr_lo: f32,
+    pub lr_t: f32,
+    pub m2_scale: f32,
+    pub apm_rate: f32,
+    pub inherit_n: u8,
+    pub limit_hi: u8,
+    pub limit_lo: u8,
+    pub w0: f32,
+    pub pmix: f32,
+}
+
+impl Default for Tune {
+    fn default() -> Self {
+        Tune {
+            lr_hi: 0.02,
+            lr_lo: 0.002,
+            lr_t: 1_048_576.0,
+            m2_scale: 0.5,
+            apm_rate: 0.02,
+            inherit_n: 2,
+            limit_hi: 127,
+            limit_lo: 250,
+            w0: 0.2,
+            pmix: 0.25,
+        }
+    }
+}
+
+impl Tune {
+    pub fn parse(spec: &str) -> Result<Tune, String> {
+        let mut t = Tune::default();
+        for kv in spec.split(',').filter(|s| !s.trim().is_empty()) {
+            let (k, v) = kv.split_once('=').ok_or(format!("bad tune item {kv}"))?;
+            let f: f64 = v.trim().parse().map_err(|_| format!("bad value {v}"))?;
+            match k.trim() {
+                "lr_hi" => t.lr_hi = f as f32,
+                "lr_lo" => t.lr_lo = f as f32,
+                "lr_t" => t.lr_t = f as f32,
+                "m2_scale" => t.m2_scale = f as f32,
+                "apm_rate" => t.apm_rate = f as f32,
+                "inherit_n" => t.inherit_n = f as u8,
+                "limit_hi" => t.limit_hi = f as u8,
+                "limit_lo" => t.limit_lo = f as u8,
+                "w0" => t.w0 = f as f32,
+                "pmix" => t.pmix = f as f32,
+                _ => return Err(format!("unknown tune key {k}")),
+            }
+        }
+        Ok(t)
+    }
+}
+
 // ---------- model ----------
 
 /// Context layout:
 ///   0          order 0
 ///   1..=7      orders 1,2,3,4,5,6,8   (each inherits from the previous)
-///   8, 9       word, word bigram
-///   10, 11     sparse: byte 2; bytes 2..3
-///   12         column: byte above in previous line + c1
+///   8, 9, 10   word, word bigram, word trigram
+///   11, 12     sparse: byte 2; bytes 2..3
+///   13         column: byte above in previous line + c1
 const ORDERS: [u32; 7] = [1, 2, 3, 4, 5, 6, 8];
-const N_CTX: usize = 13;
-const N_IN: usize = 2 * N_CTX + 2 + 1;
-const MATCH_MIN: usize = 6;
-const MATCH_BITS: u32 = 22;
-const INHERIT_N: u16 = 2;
+const N_CTX: usize = 14;
+const N_IN: usize = 3 * N_CTX + 4 + 1;
 
 pub struct ModelConfig {
     /// log2 of buckets per hashed table (64 bytes each).
     pub table_bits: u32,
+    pub tune: Tune,
 }
 
 impl Default for ModelConfig {
     fn default() -> Self {
-        ModelConfig { table_bits: 20 }
+        ModelConfig { table_bits: 20, tune: Tune::default() }
     }
 }
 
 pub struct Model {
     t: Tables,
+    tune: Tune,
     buf: Vec<u8>,
     c0: u32,
     bitpos: u32,
     c8: u64,
     word: u64,
     prevword: u64,
+    prevword2: u64,
     line_start: usize,
     prev_line_start: usize,
     ctx: [u64; N_CTX],
@@ -222,6 +389,9 @@ pub struct Model {
     b0chk: [u16; N_CTX],
     hits: usize,
     node: usize,
+    // indirect (bit-history) maps
+    hidx: [usize; N_CTX],
+    imap: Vec<Slot>,
     // run model
     rlast: [u8; N_CTX],
     rrun: [u8; N_CTX],
@@ -229,14 +399,8 @@ pub struct Model {
     rexp: [u32; N_CTX],
     ridx: [usize; N_CTX],
     runmap: Vec<Slot>,
-    // match model
-    mtab: Vec<u32>,
-    mptr: usize,
-    mlen: usize,
-    malive: bool,
-    mexp: u32,
-    mbucket: usize,
-    mcnt: Vec<Slot>,
+    // match models
+    mm: [MatchModel; 2],
     // mixing
     x: [f32; N_IN],
     m1: [Mixer; 4],
@@ -252,6 +416,7 @@ pub struct Model {
 
 impl Model {
     pub fn new(cfg: &ModelConfig) -> Self {
+        let tune = cfg.tune.clone();
         let mut tables = Vec::with_capacity(N_CTX);
         let mut tbits = [0u32; N_CTX];
         for (i, tb) in tbits.iter_mut().enumerate() {
@@ -264,6 +429,8 @@ impl Model {
             tables.push(vec![BUCKET0; 1usize << b]);
             *tb = b;
         }
+        let w0 = tune.w0;
+        let ar = tune.apm_rate;
         let mut m = Model {
             t: Tables::new(),
             buf: Vec::new(),
@@ -272,6 +439,7 @@ impl Model {
             c8: 0,
             word: 0,
             prevword: 0,
+            prevword2: 0,
             line_start: 0,
             prev_line_start: 0,
             ctx: [0; N_CTX],
@@ -282,34 +450,31 @@ impl Model {
             b0chk: [0; N_CTX],
             hits: 0,
             node: 1,
+            hidx: [0; N_CTX],
+            imap: vec![SLOT0; N_CTX * 256],
             rlast: [0; N_CTX],
             rrun: [0; N_CTX],
             ralive: [false; N_CTX],
             rexp: [0; N_CTX],
             ridx: [0; N_CTX],
             runmap: vec![SLOT0; N_CTX * 16],
-            mtab: vec![0; 1 << MATCH_BITS],
-            mptr: 0,
-            mlen: 0,
-            malive: false,
-            mexp: 0,
-            mbucket: 0,
-            mcnt: vec![SLOT0; 64],
+            mm: [MatchModel::new(5, 22), MatchModel::new(16, 22)],
             x: [0.0; N_IN],
             m1: [
-                Mixer::new(N_IN, 256, 0.2),
-                Mixer::new(N_IN, 64, 0.2),
-                Mixer::new(N_IN, 256, 0.2),
-                Mixer::new(N_IN, 64, 0.2),
+                Mixer::new(N_IN, 256, w0),
+                Mixer::new(N_IN, 64, w0),
+                Mixer::new(N_IN, 256, w0),
+                Mixer::new(N_IN, 64, w0),
             ],
             x2: [0.0; 5],
             m2: Mixer::new(5, 8, 0.25),
-            a1: Apm::new(256, 0.02),
-            a2: Apm::new(65536, 0.02),
-            a3: Apm::new(65536, 0.02),
-            a4: Apm::new(65 * 256, 0.02),
+            a1: Apm::new(256, ar),
+            a2: Apm::new(65536, ar),
+            a3: Apm::new(65536, ar),
+            a4: Apm::new(65 * 256, ar),
             a3ctx: 0,
             bits_seen: 0,
+            tune,
         };
         m.byte_contexts();
         m.nibble_lookup(true);
@@ -327,10 +492,12 @@ impl Model {
             let mask = if o >= 8 { u64::MAX } else { (1u64 << (8 * o)) - 1 };
             self.ctx[k + 1] = hash2(self.c8 & mask, o as u64 + 1);
         }
+        let w1 = self.prevword.wrapping_mul(0x2545_F491_4F6C_DD1D);
         self.ctx[8] = hash2(self.word, 101);
-        self.ctx[9] = hash2(self.word ^ self.prevword.wrapping_mul(0x2545_F491_4F6C_DD1D), 102);
-        self.ctx[10] = hash2(self.c8 & 0xff00, 103);
-        self.ctx[11] = hash2(self.c8 & 0xff_ff00, 104);
+        self.ctx[9] = hash2(self.word ^ w1, 102);
+        self.ctx[10] = hash2(self.word ^ w1 ^ self.prevword2.wrapping_mul(0x9FB2_1C65_1E98_DF25), 107);
+        self.ctx[11] = hash2(self.c8 & 0xff00, 103);
+        self.ctx[12] = hash2(self.c8 & 0xff_ff00, 104);
         let pos = self.buf.len();
         let col = pos - self.line_start;
         let above = if self.prev_line_start + col < self.line_start {
@@ -338,8 +505,8 @@ impl Model {
         } else {
             0
         };
-        self.ctx[12] = hash2((above << 8) | (self.c8 & 0xff), 105);
-        self.a3ctx = (hash2(self.c8 & 0xffff, 106) >> 56) as usize; // 8 bits of (c1,c2) hash
+        self.ctx[13] = hash2((above << 8) | (self.c8 & 0xff), 105);
+        self.a3ctx = (hash2(self.c8 & 0xffff, 106) >> 56) as usize;
     }
 
     /// Look up (or allocate) the bucket of every context for the current nibble.
@@ -351,11 +518,11 @@ impl Model {
             let b = self.tbits[i];
             let (ix, new) = lookup(&mut self.tables[i], b, h);
             if new && (2..=7).contains(&i) {
-                // inherit from the parent order's bucket for this nibble
                 let parent = self.tables[i - 1][self.cur[i - 1]].s;
+                let inh = self.tune.inherit_n;
                 let bk = &mut self.tables[i][ix];
                 for j in 0..15 {
-                    bk.s[j] = Slot { p: parent[j].p, n: parent[j].n.min(INHERIT_N) };
+                    bk.s[j] = Slot { p: parent[j].p, n: parent[j].n.min(inh), h: 1 };
                 }
             }
             self.cur[i] = ix;
@@ -375,14 +542,6 @@ impl Model {
         }
     }
 
-    fn match_bucket(len: usize) -> usize {
-        if len < 16 {
-            len
-        } else {
-            (16 + (len - 16) / 8).min(31)
-        }
-    }
-
     /// Probability that the next bit is 1, as a 24-bit integer.
     pub fn predict(&mut self) -> u32 {
         self.node = if self.bitpos < 4 {
@@ -395,7 +554,9 @@ impl Model {
         for i in 0..N_CTX {
             let s = self.tables[i][self.cur[i]].s[sn];
             self.x[i] = self.t.st16(s.p);
-            // run model
+            let hi = i * 256 + s.h as usize;
+            self.hidx[i] = hi;
+            self.x[N_CTX + i] = self.t.st16(self.imap[hi].p);
             let run = self.rrun[i];
             let last = self.rlast[i] as u32;
             if run > 0 && ((last | 256) >> (8 - self.bitpos)) == self.c0 {
@@ -405,37 +566,19 @@ impl Model {
                 self.rexp[i] = e;
                 self.ridx[i] = ri;
                 let st = self.t.st16(self.runmap[ri].p);
-                self.x[N_CTX + i] = if e != 0 { st } else { -st };
+                self.x[2 * N_CTX + i] = if e != 0 { st } else { -st };
             } else {
                 self.ralive[i] = false;
-                self.x[N_CTX + i] = 0.0;
+                self.x[2 * N_CTX + i] = 0.0;
             }
         }
 
-        // match model
-        self.malive = false;
-        if self.mlen > 0 {
-            let pb = self.buf[self.mptr] as u32;
-            if ((pb | 256) >> (8 - self.bitpos)) == self.c0 {
-                self.malive = true;
-                self.mexp = (pb >> (7 - self.bitpos)) & 1;
-                self.mbucket = Self::match_bucket(self.mlen);
-            }
-        }
-        let mi = 2 * N_CTX;
-        let msel;
-        if self.malive {
-            let s = self.t.st16(self.mcnt[self.mbucket].p);
-            let sign = if self.mexp != 0 { 1.0 } else { -1.0 };
-            self.x[mi] = s * sign;
-            self.x[mi + 1] = sign * self.mbucket as f32 * 0.0625;
-            msel = 1 + self.mbucket * 2 + self.mexp as usize;
-        } else {
-            self.x[mi] = 0.0;
-            self.x[mi + 1] = 0.0;
-            msel = 0;
-        }
-        self.x[mi + 2] = 0.5;
+        let mi = 3 * N_CTX;
+        let (xa, xb) = self.x[mi..mi + 4].split_at_mut(2);
+        let s0 = self.mm[0].predict(&self.buf, self.c0, self.bitpos, &self.t, xa);
+        let s1 = self.mm[1].predict(&self.buf, self.c0, self.bitpos, &self.t, xb);
+        self.x[mi + 4] = 0.5;
+        let msel = if s1 > 0 { s1 } else { s0 };
 
         let c1 = self.c1() as usize;
         let c0 = self.c0 as usize;
@@ -450,7 +593,9 @@ impl Model {
         let pa2 = self.a2.predict(d, c0 | (c1 << 8));
         let pa3 = self.a3.predict(d, c0 | (self.a3ctx << 8));
         let pa4 = self.a4.predict(d, c0 | (msel.min(64) << 8));
-        let p = 0.25 * pm + 0.15 * pa1 + 0.2 * pa2 + 0.25 * pa3 + 0.15 * pa4;
+        let pmx = self.tune.pmix;
+        let r = 1.0 - pmx;
+        let p = pmx * pm + r * (0.2 * pa1 + 0.27 * pa2 + 0.33 * pa3 + 0.2 * pa4);
         let p24 = (p as f64 * (1u64 << PBITS) as f64) as i64;
         p24.clamp(1, PMAX as i64) as u32
     }
@@ -458,22 +603,26 @@ impl Model {
     pub fn update(&mut self, bit: u32) {
         self.bits_seen += 1;
         let sn = self.node - 1;
+        let (lim_lo, lim_hi) = (self.tune.limit_lo, self.tune.limit_hi);
         for i in 0..N_CTX {
-            let limit = if i <= 2 { 250 } else { 127 };
+            let limit = if i <= 2 { lim_lo } else { lim_hi };
             let ix = self.cur[i];
             slot_update(&mut self.tables[i][ix].s[sn], bit, &self.t, limit);
+            slot_update(&mut self.imap[self.hidx[i]], bit, &self.t, 255);
             if self.ralive[i] {
                 slot_update(&mut self.runmap[self.ridx[i]], (bit == self.rexp[i]) as u32, &self.t, 255);
             }
         }
-        if self.malive {
-            slot_update(&mut self.mcnt[self.mbucket], (bit == self.mexp) as u32, &self.t, 255);
+        for m in self.mm.iter_mut() {
+            m.update(bit, &self.t);
         }
-        let lr = 0.002 + 0.02 / (1.0 + self.bits_seen as f32 * (1.0 / 1_048_576.0));
+        let tn = &self.tune;
+        let lr = tn.lr_lo + tn.lr_hi / (1.0 + self.bits_seen as f32 / tn.lr_t);
+        let m2lr = lr * tn.m2_scale;
         for m in self.m1.iter_mut() {
             m.update(&self.x, bit, lr);
         }
-        self.m2.update(&self.x2, bit, lr * 0.5);
+        self.m2.update(&self.x2, bit, m2lr);
         self.a1.update(bit);
         self.a2.update(bit);
         self.a3.update(bit);
@@ -493,11 +642,10 @@ impl Model {
     }
 
     fn end_byte(&mut self, b: u8) {
-        // run records for every context (nibble-0 buckets)
         for i in 0..N_CTX {
             let bk = &mut self.tables[i][self.b0[i]];
             if bk.chk != self.b0chk[i] {
-                continue; // evicted meanwhile
+                continue;
             }
             if bk.run > 0 && bk.last == b {
                 bk.run = bk.run.saturating_add(1);
@@ -519,35 +667,13 @@ impl Model {
         if is_letter {
             self.word = hash2(self.word, b.to_ascii_lowercase() as u64 + 1);
         } else if self.word != 0 {
+            self.prevword2 = self.prevword;
             self.prevword = self.word;
             self.word = 0;
         }
 
-        // match model maintenance
-        if self.mlen > 0 {
-            if self.buf[self.mptr] == b {
-                self.mlen += 1;
-                self.mptr += 1;
-            } else {
-                self.mlen = 0;
-            }
-        }
-        if pos >= MATCH_MIN {
-            let h = (hash2(self.c8 & 0xffff_ffff_ffff, 7) >> (64 - MATCH_BITS)) as usize;
-            if self.mlen == 0 {
-                let cand = self.mtab[h] as usize;
-                if cand > 0 {
-                    let mut l = 0;
-                    while l < 400 && cand > l && self.buf[cand - 1 - l] == self.buf[pos - 1 - l] {
-                        l += 1;
-                    }
-                    if l >= MATCH_MIN {
-                        self.mlen = l;
-                        self.mptr = cand;
-                    }
-                }
-            }
-            self.mtab[h] = pos as u32;
+        for m in self.mm.iter_mut() {
+            m.end_byte(&self.buf);
         }
         self.byte_contexts();
     }

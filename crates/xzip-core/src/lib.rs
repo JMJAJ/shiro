@@ -41,7 +41,7 @@ pub fn decompress(archive: &[u8]) -> Result<Vec<u8>, Error> {
     if &archive[..4] != MAGIC {
         return Err(Error::BadMagic);
     }
-    let cfg = ModelConfig { table_bits: archive[4] as u32 };
+    let cfg = ModelConfig { table_bits: archive[4] as u32, ..Default::default() };
     let n = u64::from_le_bytes(archive[5..13].try_into().unwrap()) as usize;
     let mut m = Model::new(&cfg);
     let mut d = Decoder::new(&archive[13..]);
@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn roundtrip_text_and_edge_cases() {
-        let cfg = ModelConfig { table_bits: 14 };
+        let cfg = ModelConfig { table_bits: 14, ..Default::default() };
         for data in [Vec::new(), vec![0u8], vec![255u8; 1000], sample()] {
             let c = compress(&data, &cfg);
             let d = decompress(&c).unwrap();
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn eval_matches_real_size() {
-        let cfg = ModelConfig { table_bits: 14 };
+        let cfg = ModelConfig { table_bits: 14, ..Default::default() };
         let data = sample();
         let real = compress(&data, &cfg).len() as f64 - 13.0;
         let ideal = eval(&data, &cfg, |_, _| {}).total_bits / 8.0;
