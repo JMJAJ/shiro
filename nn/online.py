@@ -302,6 +302,10 @@ def main():
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
+            loss_v = loss.detach()
+            # free this pass's activations before the next inner pass (else peak memory doubles)
+            del logits, ql, lg, loss_tok, loss, lq
+        loss = loss_v
         if step % 50 == 0 or step == steps - 1:
             done = min(ntok, (step + 1) * T * B)
             el = time.time() - t0
