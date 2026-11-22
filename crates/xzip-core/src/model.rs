@@ -307,8 +307,8 @@ pub struct Tune {
 impl Default for Tune {
     fn default() -> Self {
         Tune {
-            lr_hi: 0.02,
-            lr_lo: 0.002,
+            lr_hi: 0.01,
+            lr_lo: 0.0015,
             lr_t: 1_048_576.0,
             m2_scale: 0.5,
             apm_rate: 0.02,
