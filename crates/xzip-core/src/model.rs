@@ -310,6 +310,12 @@ pub struct Tune {
     pub mw: u8,
     /// learned final blend of mixer + APMs: 0 off, 1 replace, 2 average with fixed blend
     pub fm: u8,
+    /// ablation: bit k turns context 20+k into a constant
+    pub xoff: u32,
+    /// bit-history map index includes a confidence bucket of the slot count
+    pub ih: u8,
+    /// order-3 APM in the learned final blend
+    pub a5: u8,
 }
 
 impl Default for Tune {
@@ -329,6 +335,9 @@ impl Default for Tune {
             a3bits: 12,
             mw: 1,
             fm: 2,
+            xoff: 0,
+            ih: 1,
+            a5: 1,
         }
     }
 }
@@ -354,6 +363,9 @@ impl Tune {
                 "a3bits" => t.a3bits = (f as u8).min(12),
                 "mw" => t.mw = f as u8,
                 "fm" => t.fm = f as u8,
+                "xoff" => t.xoff = f as u32,
+                "ih" => t.ih = f as u8,
+                "a5" => t.a5 = f as u8,
                 _ => return Err(format!("unknown tune key {k}")),
             }
         }
@@ -374,8 +386,12 @@ impl Tune {
 ///   16         line head: first two bytes of the line + c1
 ///   17, 18     orders 12, 16
 ///   19         indirect: the two bytes that followed the last two occurrences of c2c1, + c1
+///   20         XML tag: name of the last opened tag + order 3
+///   21         number: digit-run length + 2 bytes before the run + c1
+///   22         sparse: bytes 1 and 3
+///   23         markup segment: opener ([[ | = etc.) + distance bucket + word0
 const ORDERS: [u32; 7] = [1, 2, 3, 4, 5, 6, 8];
-const N_CTX: usize = 20;
+const N_CTX: usize = 24;
 /// per context: slot, indirect, run, confidence; + 2x2 match + bias
 const N_IN: usize = 4 * N_CTX + 4 + 1 + 2; // + side (neural) input, present flag
 
@@ -446,15 +462,24 @@ pub struct Model {
     m1: [Mixer; 7],
     x2: [f32; 9],
     wlen: usize,
+    tag: u64,
+    in_tag: bool,
+    tag_done: bool,
+    drun: u64,
+    dpre: u64,
+    seg: u64,
+    seg_pos: usize,
     side: u16,
     side_st: f32,
     m2: Mixer,
     fmx: Mixer,
-    xf: [f32; 6],
+    xf: [f32; 7],
     a1: Apm,
     a2: Apm,
     a3: Apm,
     a4: Apm,
+    a5: Apm,
+    a5ctx: usize,
     a3ctx: usize,
     bits_seen: u64,
 }
@@ -499,7 +524,7 @@ impl Model {
             hits: 0,
             node: 1,
             hidx: [0; N_CTX],
-            imap: vec![SLOT0; N_CTX * 256],
+            imap: vec![SLOT0; N_CTX * 1024],
             rlast: [0; N_CTX],
             rrun: [0; N_CTX],
             ralive: [false; N_CTX],
@@ -519,15 +544,24 @@ impl Model {
             ],
             x2: [0.0; 9],
             wlen: 0,
+            tag: 0,
+            in_tag: false,
+            tag_done: true,
+            drun: 0,
+            dpre: 0,
+            seg: 0,
+            seg_pos: 0,
             side: 0,
             side_st: 0.0,
             m2: Mixer::new(9, 256, 0.15),
-            fmx: Mixer::new(6, 256, 0.2),
-            xf: [0.0; 6],
+            fmx: Mixer::new(7, 256, 0.2),
+            xf: [0.0; 7],
             a1: Apm::new(256, ar),
             a2: Apm::new(65536, ar),
             a3: Apm::new(1 << 20, ar),
             a4: Apm::new(65 * 256, ar),
+            a5: Apm::new(1 << 20, ar),
+            a5ctx: 0,
             a3ctx: 0,
             bits_seen: 0,
             tune,
@@ -591,7 +625,19 @@ impl Model {
         self.ctx[18] = hash2(h16, 113);
         let iv = self.ind2[(self.c8 & 0xffff) as usize] as u64;
         self.ctx[19] = hash2((iv << 8) | (self.c8 & 0xff), 114);
+        self.ctx[20] = hash2(self.tag ^ ((self.c8 & 0xff_ffff) << 1) ^ (self.in_tag as u64), 115);
+        self.ctx[21] = hash2((self.drun.min(15) << 32) | (self.dpre << 8) | (self.c8 & 0xff), 116);
+        self.ctx[22] = hash2(self.c8 & 0xff_00ff, 117);
+        let sd = (n - self.seg_pos).min(15) as u64;
+        self.ctx[23] = hash2(self.word ^ (self.seg << 56) ^ (sd << 48), 118);
+        let xo = self.tune.xoff;
+        for k in 0..4 {
+            if xo >> k & 1 != 0 {
+                self.ctx[20 + k] = hash2(0, 200 + k as u64);
+            }
+        }
         self.a3ctx = (hash2(self.c8 & 0xffff, 106) >> (64 - self.tune.a3bits as u32)) as usize;
+        self.a5ctx = (hash2(self.c8 & 0xff_ffff, 119) >> 52) as usize;
     }
 
     /// Look up (or allocate) the bucket of every context for the current nibble.
@@ -646,7 +692,8 @@ impl Model {
         for i in 0..N_CTX {
             let s = self.tables[i][self.cur[i]].s[sn];
             self.x[i] = self.t.st16(s.p);
-            let hi = i * 256 + s.h as usize;
+            let nb = if self.tune.ih != 0 { [0usize, 1, 1, 2, 2, 2, 2, 2][(s.n as usize).min(7)] + (s.n >= 30) as usize } else { 0 };
+            let hi = (i * 4 + nb) * 256 + s.h as usize;
             self.hidx[i] = hi;
             self.x[N_CTX + i] = self.t.st16(self.imap[hi].p);
             let run = self.rrun[i];
@@ -706,7 +753,8 @@ impl Model {
         let mut p = pmx * pm + r * (0.2 * pa1 + 0.27 * pa2 + 0.33 * pa3 + 0.2 * pa4);
         if self.tune.fm != 0 {
             let st = |q: f32| dmath::stretch(q.clamp(1e-6, 1.0 - 1e-6) as f64) as f32;
-            self.xf = [st(pm), st(pa1), st(pa2), st(pa3), st(pa4), 0.5];
+            let pa5 = if self.tune.a5 != 0 { self.a5.predict(d, c0 | (self.a5ctx << 8)) } else { 0.5 };
+            self.xf = [st(pm), st(pa1), st(pa2), st(pa3), st(pa4), st(pa5), 0.5];
             self.fmx.predict(&self.xf, c0);
             let q = self.fmx.pr;
             p = if self.tune.fm == 1 { q } else { 0.5 * (p + q) };
@@ -747,6 +795,9 @@ impl Model {
         self.a2.update(bit);
         self.a3.update(bit);
         self.a4.update(bit);
+        if self.tune.a5 != 0 && self.tune.fm != 0 {
+            self.a5.update(bit);
+        }
 
         self.c0 = (self.c0 << 1) | bit;
         self.bitpos += 1;
@@ -803,6 +854,36 @@ impl Model {
             self.brk_n = 0;
         }
 
+        // XML tag name: bytes after '<' up to space / '>' / '/'
+        if b == b'<' {
+            self.in_tag = true;
+            self.tag_done = false;
+            self.tag = 0;
+        } else if self.in_tag && !self.tag_done {
+            if b == b' ' || b == b'>' || (b == b'/' && self.tag != 0) {
+                self.tag_done = true;
+            } else {
+                self.tag = hash2(self.tag, b as u64);
+            }
+        }
+        if b == b'>' {
+            self.in_tag = false;
+        }
+        if b.is_ascii_digit() {
+            if self.drun == 0 {
+                self.dpre = (self.c8 >> 8) & 0xffff;
+            }
+            self.drun += 1;
+        } else {
+            self.drun = 0;
+        }
+        match b {
+            b'[' | b'|' | b'=' | b'{' | 10 | b'*' | b'#' | 39 => {
+                self.seg = b as u64;
+                self.seg_pos = pos;
+            }
+            _ => {}
+        }
         let is_letter = b.is_ascii_alphabetic() || b >= 128;
         if is_letter {
             self.word = hash2(self.word, b.to_ascii_lowercase() as u64 + 1);
