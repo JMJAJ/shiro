@@ -185,12 +185,13 @@ def main():
     ap.add_argument("--inner", type=int, default=1)
     ap.add_argument("--qw", type=float, default=0.3, help="lookahead head loss weight")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--device", default="cuda")
     ap.add_argument("--log", default=None)
     ap.add_argument("--note", default="")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
-    dev = "cuda"
+    dev = args.device
     data = open(args.file, "rb").read()
     n = len(data)
     t0 = time.time()
@@ -241,7 +242,7 @@ def main():
         for g in opt.param_groups:
             g["lr"] = lr
         for it in range(args.inner):
-            with torch.autocast("cuda", dtype=torch.bfloat16):
+            with torch.autocast(dev.split(":")[0], dtype=torch.bfloat16):
                 logits, ql = model(inp)
             lg = logits[:, T:].float()
             y = tgt[:, T:]
