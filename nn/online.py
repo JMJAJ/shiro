@@ -167,6 +167,10 @@ class Marginaliser:
             add = exm[:, None] * Qr + oov[:, None] * (self.u_letter[None] + 0.3 * Qr)
             D1 = D * self.letter + add
             D = torch.where(k1[:, None], D1, D)
+        k2 = rkind == 2
+        if k2.any():
+            # known-OOV letters / delimiter: the NN's own byte-token prediction
+            D = torch.where(k2[:, None], P[rtok, :256], D)
         D = D + 1e-6
         C = torch.zeros(D.shape[0], 257, device=self.dev, dtype=torch.float64)
         C[:, 1:] = torch.cumsum(D.double(), -1)

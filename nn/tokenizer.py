@@ -14,7 +14,10 @@ Byte records (what the NN tells the CM about each byte):
           it: letters get the mass of vocab strings extending s by b; non-letters
           get P_t(s exact) * Q_t(b); plus the OOV mass P_t(byte token s[0])
           spread by a generic letter/delimiter distribution.
-  none:   prefix left the vocabulary trie (OOV interior).
+  kind 2: prefix left the vocabulary trie, so the run is OOV and was emitted as
+          byte tokens: the decoder knows this, and the NN's own prediction for that
+          byte token (P_{t+k} over ids 0..255) is causal. Also used for the
+          delimiter after such a run.
 Every record uses the distribution P_t of the run's FIRST token, because a
 decoder cannot consume the run until its delimiter has been decoded.
 """
@@ -153,7 +156,11 @@ class Vocab:
                 node = root
                 for k in range(s, e):
                     if node < 0:
-                        break
+                        # OOV interior: byte token t + (k - s) predicts this letter
+                        rec_tok[k] = t + (k - s)
+                        rec_node[k] = root
+                        rec_kind[k] = 2
+                        continue
                     rec_tok[k] = t
                     rec_node[k] = node
                     rec_kind[k] = 0 if k == s else 1
@@ -166,8 +173,11 @@ class Vocab:
                         rec_node[e] = node
                         rec_kind[e] = 1
                         rec_first[e] = a[s]
-                    # else: delimiter after an OOV interior gets no record (a decoder
-                    # cannot know the run ended before decoding it)
+                    else:
+                        # known-OOV run: the delimiter is byte token t + len(run)
+                        rec_tok[e] = t + (e - s)
+                        rec_node[e] = root
+                        rec_kind[e] = 2
                     toks.append(a[e])
                     q_target.append(-1)
                     i = e + 1
