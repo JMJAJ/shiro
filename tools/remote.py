@@ -30,7 +30,9 @@ def connect():
         os.environ.get("XZIP_HOST", "192.168.0.116"),
         username=os.environ.get("XZIP_USER", "Jxint"),
         password=os.environ.get("XZIP_PASS"),
-        timeout=15,
+        timeout=60,
+        banner_timeout=120,
+        auth_timeout=120,
         allow_agent=os.environ.get("XZIP_PASS") is None,
         look_for_keys=os.environ.get("XZIP_PASS") is None,
     )
