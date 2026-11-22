@@ -315,6 +315,8 @@ pub struct Tune {
     pub ih: u8,
     /// order-3 APM in the learned final blend
     pub a5: u8,
+    /// mixer selected by the previous two bytes
+    pub m7: u8,
 }
 
 impl Default for Tune {
@@ -337,6 +339,7 @@ impl Default for Tune {
             xoff: 0,
             ih: 1,
             a5: 1,
+            m7: 1,
         }
     }
 }
@@ -365,6 +368,7 @@ impl Tune {
                 "xoff" => t.xoff = f as u32,
                 "ih" => t.ih = f as u8,
                 "a5" => t.a5 = f as u8,
+                "m7" => t.m7 = f as u8,
                 _ => return Err(format!("unknown tune key {k}")),
             }
         }
@@ -458,8 +462,8 @@ pub struct Model {
     mm: [MatchModel; 2],
     // mixing
     x: [f32; N_IN],
-    m1: [Mixer; 7],
-    x2: [f32; 9],
+    m1: [Mixer; 8],
+    x2: [f32; 10],
     wlen: usize,
     tag: u64,
     in_tag: bool,
@@ -540,8 +544,9 @@ impl Model {
                 Mixer::new(N_IN, 512, w0),
                 Mixer::new(N_IN, 33 * 8, w0),
                 Mixer::new(N_IN, 16 * 8 * 8, w0),
+                Mixer::new(N_IN, 65536, w0),
             ],
-            x2: [0.0; 9],
+            x2: [0.0; 10],
             wlen: 0,
             tag: 0,
             in_tag: false,
@@ -552,7 +557,7 @@ impl Model {
             seg_pos: 0,
             side: 0,
             side_st: 0.0,
-            m2: Mixer::new(9, 256, 0.15),
+            m2: Mixer::new(10, 256, 0.15),
             fmx: Mixer::new(7, 256, 0.2),
             xf: [0.0; 7],
             a1: Apm::new(256, ar),
@@ -739,7 +744,8 @@ impl Model {
         } else {
             0.0
         };
-        self.x2 = [d0, d1, d2, d3, d4, d5, d6, self.side_st, 0.5];
+        let d7 = if self.tune.m7 != 0 { self.m1[7].predict(&self.x, (self.c8 & 0xffff) as usize) } else { 0.0 };
+        self.x2 = [d0, d1, d2, d3, d4, d5, d6, d7, self.side_st, 0.5];
         let s2 = if self.tune.m2sel == 1 { c0 } else { self.bitpos as usize };
         let d = self.m2.predict(&self.x2, s2);
         let pm = self.m2.pr;
@@ -785,6 +791,9 @@ impl Model {
         let nm = if self.tune.mw != 0 { 7 } else { 6 };
         for m in self.m1[..nm].iter_mut() {
             m.update(&self.x, bit, lr);
+        }
+        if self.tune.m7 != 0 {
+            self.m1[7].update(&self.x, bit, lr);
         }
         self.m2.update(&self.x2, bit, m2lr);
         if self.tune.fm != 0 {
