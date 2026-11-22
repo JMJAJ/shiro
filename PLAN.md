@@ -228,3 +228,22 @@ This track is out of scope until Phase 4's gate.
 | 4-day runs make iteration too slow | The rung ladder, plus projecting from `e8` and `e9p`. Full `e9` runs only at gates. Option: rent a larger GPU for the final runs only. |
 | Top entries move (89 MB entries appeared in Nov 2026) | Check the leaderboard at each gate. Targets are relative to the current #1. |
 | Ideas already used by top entries (B1, B3 likely in part) | Phase 0 study of the reference implementation. Our edge is the combination and B2, B4 and B5. |
+
+---
+
+## 9. Status log
+
+**Test box** (from 2026-11-22): Fedora 44 laptop, Ryzen 7 250 (8 cores / 16 threads), 30 GB RAM, RTX 5050 Laptop 8 GB. Code is written on the Windows PC and run there via `tools/remote.py`. Data lives in `~/xzip/data` and every run is logged to `results/runs.jsonl`.
+
+| Date | Milestone | enwik7 | enwik8 |
+|---|---|---|---|
+| 11-22 | xz -9e / zstd -22 --long | 2,720,256 / 2,793,530 | 24,831,648 / 25,273,903 |
+| 11-22 | CM v0: orders 0–8, word, match, 2-layer mixer, 2 APMs | 2,265,186 | 20,970,757 |
+| 11-22 | CM v1: checksummed nibble buckets, run model, inheritance, sparse + column contexts | 2,079,922 | |
+| 11-22 | CM v2: indirect bit-history, 2 match models, word trigram | 2,038,239 | |
+| 11-22 | CM v3: bracket, line-head and word-skip contexts, confidence inputs, char-class mixer, tuned learning rate | 1,993,246 | **18,160,029** (10.5 µs/B, 3.9 GB) |
+
+Phase 2 groundwork is in place:
+- `nn/tokenizer.py`: reversible word tokenizer plus vocabulary trie.
+- `nn/online.py`: online transformer with lockstep streams and GPU token→bit conversion (§B7, using a lookahead head for the byte after each word).
+- `xzip eval --side`: mixes the neural predictions into the CM.
