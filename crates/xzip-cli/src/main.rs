@@ -1,10 +1,10 @@
 use std::io::Write;
 use std::time::Instant;
-use xzip_core::{compress, decompress, eval, model::ModelConfig, regions};
+use xzip_core::{compress, decompress, eval_streams, model::ModelConfig, regions};
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  xzip c <in> <out> [--bits N]\n  xzip d <in> <out>\n  xzip eval <in> [--bits N] [--log results.jsonl] [--note TEXT] [--rev SHA] [--side FILE] [--order FILE]"
+        "usage:\n  xzip c <in> <out> [--bits N]\n  xzip d <in> <out>\n  xzip eval <in> [--bits N] [--log results.jsonl] [--note TEXT] [--rev SHA] [--side FILE] [--order FILE [--streams B]]"
     );
     std::process::exit(2)
 }
@@ -97,8 +97,30 @@ fn main() {
             // --order FILE: u64 LE (start, end) byte ranges, in the order a decoder would
             // see them (e.g. the NN's block-interleaved stream schedule). Must cover every
             // byte exactly once.
+            let mut switches: Vec<(usize, usize)> = Vec::new();
             if let Some(op) = flag(&args, "--order") {
                 let raw = std::fs::read(&op).expect("read order file");
+                let nstreams: usize = flag(&args, "--streams").map(|v| v.parse().expect("--streams N")).unwrap_or(0);
+                let rs: Vec<(usize, usize)> = raw
+                    .chunks_exact(16)
+                    .map(|c| {
+                        (
+                            u64::from_le_bytes(c[..8].try_into().unwrap()) as usize,
+                            u64::from_le_bytes(c[8..].try_into().unwrap()) as usize,
+                        )
+                    })
+                    .collect();
+                // stream b's bytes are one contiguous span; its first range is in step 0
+                let mut starts: Vec<usize> = rs.iter().take(nstreams).map(|r| r.0).collect();
+                starts.sort_unstable();
+                let mut q = 0usize;
+                for &(a, b) in &rs {
+                    if nstreams > 0 && a < b {
+                        let k = starts.partition_point(|&s0| s0 <= a) - 1;
+                        switches.push((q, k));
+                    }
+                    q += b - a;
+                }
                 let mut seen = vec![false; n];
                 let mut nd = Vec::with_capacity(n);
                 let mut ns = side.as_ref().map(|_| Vec::with_capacity(n * 8));
@@ -122,7 +144,7 @@ fn main() {
                     side = ns;
                 }
             }
-            let rep = eval(&data, &cfg, side.as_deref(), |pos, bits| {
+            let rep = eval_streams(&data, &cfg, side.as_deref(), &switches, |pos, bits| {
                 let el = t0.elapsed().as_secs_f64();
                 eprint!(
                     "\r  {:>6.1}%  {:.4} bpc  {:.0} ns/B   ",

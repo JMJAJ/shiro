@@ -429,10 +429,59 @@ impl Default for ModelConfig {
     }
 }
 
+/// Per-stream context history (see `Model::switch_stream`).
+struct Hist {
+    lb: Vec<u8>,
+    c8: u64,
+    word: u64,
+    prevword: u64,
+    prevword2: u64,
+    line_start: usize,
+    prev_line_start: usize,
+    brk: [u8; 16],
+    brk_n: usize,
+    wlen: usize,
+    tag: u64,
+    in_tag: bool,
+    tag_done: bool,
+    drun: u64,
+    dpre: u64,
+    seg: u64,
+    seg_pos: usize,
+}
+
+impl Hist {
+    fn new() -> Self {
+        Hist {
+            lb: Vec::new(),
+            c8: 0,
+            word: 0,
+            prevword: 0,
+            prevword2: 0,
+            line_start: 0,
+            prev_line_start: 0,
+            brk: [0; 16],
+            brk_n: 0,
+            wlen: 0,
+            tag: 0,
+            in_tag: false,
+            tag_done: true,
+            drun: 0,
+            dpre: 0,
+            seg: 0,
+            seg_pos: 0,
+        }
+    }
+}
+
 pub struct Model {
     t: Tables,
     tune: Tune,
     buf: Vec<u8>,
+    /// context history of the current stream (== buf unless streams are switched)
+    lb: Vec<u8>,
+    cur_stream: usize,
+    saved: Vec<Option<Hist>>,
     c0: u32,
     bitpos: u32,
     c8: u64,
@@ -513,6 +562,9 @@ impl Model {
         let mut m = Model {
             t: Tables::new(),
             buf: Vec::new(),
+            lb: Vec::new(),
+            cur_stream: 0,
+            saved: Vec::new(),
             c0: 1,
             bitpos: 0,
             c8: 0,
@@ -605,10 +657,10 @@ impl Model {
         self.ctx[10] = hash2(self.word ^ w1 ^ self.prevword2.wrapping_mul(0x9FB2_1C65_1E98_DF25), 107);
         self.ctx[11] = hash2(self.c8 & 0xff00, 103);
         self.ctx[12] = hash2(self.c8 & 0xff_ff00, 104);
-        let pos = self.buf.len();
+        let pos = self.lb.len();
         let col = pos - self.line_start;
         let above = if self.prev_line_start + col < self.line_start {
-            self.buf[self.prev_line_start + col] as u64
+            self.lb[self.prev_line_start + col] as u64
         } else {
             0
         };
@@ -617,20 +669,20 @@ impl Model {
         let top = if self.brk_n > 0 { self.brk[(self.brk_n - 1).min(15)] as u64 } else { 0 };
         self.ctx[15] = hash2(self.word ^ (top << 56) ^ ((self.brk_n.min(7) as u64) << 48), 110);
         let head = if col >= 2 {
-            ((self.buf[self.line_start] as u64) << 8) | self.buf[self.line_start + 1] as u64
+            ((self.lb[self.line_start] as u64) << 8) | self.lb[self.line_start + 1] as u64
         } else if col == 1 {
-            self.buf[self.line_start] as u64
+            self.lb[self.line_start] as u64
         } else {
             0
         };
         self.ctx[16] = hash2((head << 8) | (self.c8 & 0xff), 111);
-        let n = self.buf.len();
+        let n = self.lb.len();
         let mut h12 = 0u64;
-        for &c in &self.buf[n.saturating_sub(12)..] {
+        for &c in &self.lb[n.saturating_sub(12)..] {
             h12 = h12.wrapping_mul(0x100_0000_01B3).wrapping_add(c as u64 + 1);
         }
         let mut h16 = h12;
-        for &c in &self.buf[n.saturating_sub(16)..n.saturating_sub(12)] {
+        for &c in &self.lb[n.saturating_sub(16)..n.saturating_sub(12)] {
             h16 = h16.wrapping_mul(0x100_0000_01B3).wrapping_add(c as u64 + 7);
         }
         self.ctx[17] = hash2(h12, 112);
@@ -683,6 +735,63 @@ impl Model {
         if first {
             self.hits = hits;
         }
+    }
+
+    /// Switch the context history to stream `k` (call at a byte boundary).
+    /// Statistics (tables, mixers, APMs, match memory) stay shared across streams;
+    /// only the byte history that contexts are computed from is per-stream, so a
+    /// decoder that interleaves blocks of B streams still sees each byte's true
+    /// left context.
+    pub fn switch_stream(&mut self, k: usize) {
+        if k == self.cur_stream {
+            return;
+        }
+        debug_assert_eq!(self.bitpos, 0);
+        let need = k.max(self.cur_stream) + 1;
+        if self.saved.len() < need {
+            self.saved.resize_with(need, || None);
+        }
+        // park the current history, then bring in stream k's (fresh if unseen)
+        let mut h = Hist::new();
+        std::mem::swap(&mut self.lb, &mut h.lb);
+        std::mem::swap(&mut self.c8, &mut h.c8);
+        std::mem::swap(&mut self.word, &mut h.word);
+        std::mem::swap(&mut self.prevword, &mut h.prevword);
+        std::mem::swap(&mut self.prevword2, &mut h.prevword2);
+        std::mem::swap(&mut self.line_start, &mut h.line_start);
+        std::mem::swap(&mut self.prev_line_start, &mut h.prev_line_start);
+        std::mem::swap(&mut self.brk, &mut h.brk);
+        std::mem::swap(&mut self.brk_n, &mut h.brk_n);
+        std::mem::swap(&mut self.wlen, &mut h.wlen);
+        std::mem::swap(&mut self.tag, &mut h.tag);
+        std::mem::swap(&mut self.in_tag, &mut h.in_tag);
+        std::mem::swap(&mut self.tag_done, &mut h.tag_done);
+        std::mem::swap(&mut self.drun, &mut h.drun);
+        std::mem::swap(&mut self.dpre, &mut h.dpre);
+        std::mem::swap(&mut self.seg, &mut h.seg);
+        std::mem::swap(&mut self.seg_pos, &mut h.seg_pos);
+        self.saved[self.cur_stream] = Some(h);
+        let mut h = self.saved[k].take().unwrap_or_else(Hist::new);
+        std::mem::swap(&mut self.lb, &mut h.lb);
+        std::mem::swap(&mut self.c8, &mut h.c8);
+        std::mem::swap(&mut self.word, &mut h.word);
+        std::mem::swap(&mut self.prevword, &mut h.prevword);
+        std::mem::swap(&mut self.prevword2, &mut h.prevword2);
+        std::mem::swap(&mut self.line_start, &mut h.line_start);
+        std::mem::swap(&mut self.prev_line_start, &mut h.prev_line_start);
+        std::mem::swap(&mut self.brk, &mut h.brk);
+        std::mem::swap(&mut self.brk_n, &mut h.brk_n);
+        std::mem::swap(&mut self.wlen, &mut h.wlen);
+        std::mem::swap(&mut self.tag, &mut h.tag);
+        std::mem::swap(&mut self.in_tag, &mut h.in_tag);
+        std::mem::swap(&mut self.tag_done, &mut h.tag_done);
+        std::mem::swap(&mut self.drun, &mut h.drun);
+        std::mem::swap(&mut self.dpre, &mut h.dpre);
+        std::mem::swap(&mut self.seg, &mut h.seg);
+        std::mem::swap(&mut self.seg_pos, &mut h.seg_pos);
+        self.cur_stream = k;
+        self.byte_contexts();
+        self.nibble_lookup(true);
     }
 
     /// External (neural) prediction for the next bit: P(1) * 65536, 0 = none.
@@ -855,7 +964,8 @@ impl Model {
         let k2 = (self.c8 & 0xffff) as usize;
         self.ind2[k2] = (self.ind2[k2] << 8) | b as u16;
         self.buf.push(b);
-        let pos = self.buf.len();
+        self.lb.push(b);
+        let pos = self.lb.len();
         self.c8 = (self.c8 << 8) | b as u64;
         if b == b'\n' {
             self.prev_line_start = self.line_start;

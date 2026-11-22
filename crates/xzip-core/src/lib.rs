@@ -73,9 +73,22 @@ pub fn eval(
     data: &[u8],
     cfg: &ModelConfig,
     side: Option<&[u16]>,
+    progress: impl FnMut(usize, f64),
+) -> EvalReport {
+    eval_streams(data, cfg, side, &[], progress)
+}
+
+/// Like `eval`, but `switches` = sorted (byte position, stream id): before coding the
+/// byte at that position the model switches to that stream's context history.
+pub fn eval_streams(
+    data: &[u8],
+    cfg: &ModelConfig,
+    side: Option<&[u16]>,
+    switches: &[(usize, usize)],
     mut progress: impl FnMut(usize, f64),
 ) -> EvalReport {
     let mut m = Model::new(cfg);
+    let mut sw = switches.iter().peekable();
     let mut rc = regions::Classifier::new();
     let mut rep = EvalReport {
         bytes: data.len() as u64,
@@ -85,6 +98,13 @@ pub fn eval(
     };
     let scale = 1.0 / (1u64 << PBITS) as f64;
     for (pos, &byte) in data.iter().enumerate() {
+        while let Some(&&(p, k)) = sw.peek() {
+            if p > pos {
+                break;
+            }
+            m.switch_stream(k);
+            sw.next();
+        }
         let r = rc.region() as usize;
         let mut cost = 0.0f64;
         for i in (0..8).rev() {
