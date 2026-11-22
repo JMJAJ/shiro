@@ -22,8 +22,8 @@ Citations are given from primary sources, by author, year and venue. Links have 
 | 4 | Parts 6, 9 and 10: ideas from outside compression; a deterministic-inference engineering study; a benchmark suite beyond enwik | open |
 
 Open questions carried forward:
-- **Q1.** What does the honest, decodable hybrid cost? A measurement is running; see A1.
-- **Q2.** Why did 2 passes per batch give −3.3% on enwik7 but nothing on enwik8? An experiment on the 20 MB prefix is running.
+- **Q1.** What does the honest, decodable hybrid cost? Without P1, +5.8% (17,598,163 on enwik8). With P1, measurement running.
+- **Q2, answered.** The second pass's gain shrinks as the file grows. NN-only, `--inner 2` vs 1 pass: −3.3% on enwik7, −2.25% on the first 20 MB of enwik8, about −1.2% on enwik8. The enwik8 figure combines B = 24 + inner 2 being level with B = 32 + 1 pass, and B = 32 costing +1.25% vs B = 24 on the 20 MB prefix. So extra passes mostly speed up early learning, which is consistent with the 8.5 learning-curve picture. Fewer streams help at every size measured. Implication for P4: replay has to bring *new* signal, not just repeat the current block.
 - **Q3.** Can GPU training be made bit-reproducible, and at what speed cost?
 
 ---
@@ -89,8 +89,8 @@ flowchart LR
 
 | # | Finding | Severity | Evidence |
 |---|---|---|---|
-| **A1** | **The hybrid numbers are not decodable as measured.** The NN trains B streams in lockstep, so its prediction at step s depends on training over *all* streams at steps < s. A decoder must therefore produce bytes in **block-interleaved** order: step s, then streams 0…B−1. `xzip eval --side` feeds the CM in *file* order, which a decoder cannot reproduce: stream 0 would need NN steps whose training depends on stream 1, which isn't decoded yet. In the decodable order the CM's order-n contexts break at every block boundary (~486 bytes). | **critical** for every hybrid claim | Code: `online.py` stream layout vs `lib.rs::eval`. Measurement: `eval --order` + `tools/schedule.py` (added today). 200 KB smoke test, B = 4, T = 64: CM +10.6%. enwik8 run in progress. |
-| **A2** | **GPU training is not reproducible.** Training runs under bf16 autocast with cuBLAS reductions in nondeterministic order. There's no `torch.use_deterministic_algorithms`, and no fixed kernel set. A decoder on another GPU, driver or PyTorch version, or even a rerun, would compute different probabilities, and the arithmetic decoder would desynchronize after the first differing bit. | **critical** for an archive | Code: `online.py` training loop. |
+| **A1** | **The hybrid numbers are not decodable as measured.** The NN trains B streams in lockstep, so its prediction at step s depends on training over *all* streams at steps < s. A decoder must therefore produce bytes in **block-interleaved** order: step s, then streams 0…B−1. `xzip eval --side` feeds the CM in *file* order, which a decoder cannot reproduce: stream 0 would need NN steps whose training depends on stream 1, which isn't decoded yet. In the decodable order the CM's order-n contexts break at every block boundary (~486 bytes). | **critical** for every hybrid claim | Code: `online.py` stream layout vs `lib.rs::eval`. Measurement: `eval --order` + `tools/schedule.py`. **enwik8, B = 24, T = 256 (205,776 blocks, mean 486 B): CM 17,780,730 → 19,421,393 (+9.2%); hybrid 16,637,907 → 17,598,163 (+5.8%).** The fix is P1. |
+| **A2** | **GPU training is not reproducible.** Measured: two identical enwik7 runs gave NN-only 2,523,937 vs 2,530,883 (0.27% apart). Training runs under bf16 autocast with cuBLAS reductions in nondeterministic order. There's no `torch.use_deterministic_algorithms`, and no fixed kernel set. A decoder on another GPU, driver or PyTorch version, or even a rerun, would compute different probabilities, and the arithmetic decoder would desynchronize after the first differing bit. | **critical** for an archive | Code: `online.py` training loop. |
 | **A3** | **The vocabulary is not paid for.** `Vocab.build` scans the whole file before coding. A decoder needs the 16,384-word list, and that cost is missing from every NN and hybrid number. Fix it either by coding the vocabulary as a header (estimated at roughly 0.05–0.1 MB with xz) or by building the vocabulary online. | moderate (~0.3–0.6% on enwik8, less on enwik9) | Code: `online.py` main, `tokenizer.py::Vocab.build`. |
 | **A4** | **5.3% of bytes get no NN prediction.** 94,744,874 of 100M bytes have a record. The rest are the inside letters of out-of-vocabulary words and the delimiter after them. Once a prefix leaves the trie, the decoder *knows* those letters are byte tokens, so the NN's prediction at that token position is valid and causal. It just isn't used yet. These are the rare-word bytes, among the most expensive in the file. | moderate, cheap to fix | Log: `records 94744874/100000000`. Code: `tokenizer.py` (`if node < 0: break`). |
 | **A5** | **The archive format has no model version and no checksum.** The header is `XZP0` + table bits + length. Every model change (v3 → v4.2) silently changes the format, so an old archive decodes to garbage with a new binary, and nothing detects corruption. | moderate (correctness hygiene) | Code: `lib.rs` header. |
@@ -202,7 +202,7 @@ When the decoder switches to stream b, it swaps in stream b's history. Contexts 
 
 **Cost.** It's one gather from logits the model already computes.
 
-**Validation.** The record coverage goes from 94.7% to ~100%. Then the fused enwik8 size, using the same saved weights and seed, compared against 16,637,907 (or its interleaved equivalent).
+**Result (enwik7, same CM): records 95.7% → 100%; hybrid 1,911,138 → 1,904,474 (−0.35%). [E]** Validation still to do: Then the fused enwik8 size, using the same saved weights and seed, compared against 16,637,907 (or its interleaved equivalent).
 
 ### P4. Surprise-prioritized replay (B2) [H]
 
