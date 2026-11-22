@@ -100,6 +100,39 @@ flowchart LR
 | **A9** | **Mismatch between training objective and the probabilities used.** The NN trains on token cross-entropy, plus 0.3 × the lookahead loss. The CM consumes the *marginalised per-bit* probabilities, where every byte inside a word uses the first token's distribution. The objective never sees the cost of the bytes after the first. It is a proxy, not the coded loss. | design question | Code: loss in `online.py`. |
 | **A10** | **A Python loop sits in the hot path.** Side records are gathered with a per-row Python loop (B·T = 6,144 iterations per step) before the GPU marginaliser runs. It is not the bottleneck at 0.3 s/step, but it caps throughput once the model is faster. | low | Code: `online.py` (`for r, g in enumerate(gpos_np)`). |
 
+### F.2b The decodable-order cost, measured (P1 in practice)
+
+`tools/decodable.sh` runs the CM alone on enwik7 in four orders: file order (not decodable), interleaved with shared history, per-stream history (P1), and P1 plus a per-stream indirect table (`ind2s`). Each entry is the cost vs file order (1,961,099).
+
+| B (streams) | T (tokens/block) | Shared history | P1 | P1 + ind2s |
+|---|---|---|---|---|
+| 24 | 256 | +8.07% | +4.51% | **+3.57%** |
+| 24 | 1024 | +4.40% | +3.16% | +2.66% |
+| 24 | 4096 | +2.36% | +1.83% | +1.63% |
+| 8 | 256 | +6.82% | +3.29% | +2.63% |
+| 4 | 256 | +5.84% | +2.41% | +1.94% |
+| 2 | 256 | +4.50% | +1.39% | +1.14% |
+
+**[E] What this rules in and out:**
+- **Ruled out: table capacity.** With 4× the tables (`--bits 22`) the gap is the same: +3.51% vs +3.57%.
+- **Ruled out: match models.** Per-stream match state recovered only 0.1% on enwik8.
+- **Ruled in: interleaving.** The cost falls with fewer streams and with longer blocks, but slowly.
+
+The remaining loss is **recency kept inside shared statistics**. Each slot's bit history, each bucket's run record, and the fast-adapting mixer and APM weights remember the last time a context occurred. In file order that last occurrence is usually from the same article; interleaved, it often comes from another region.
+
+**On enwik8, B = 24, T = 256** (P1 without `ind2s`):
+
+| | Shared history | P1 | P1 + per-stream match state |
+|---|---|---|---|
+| CM | 19,421,393 | 18,694,996 | 18,674,551 |
+| Hybrid | 17,598,163 | 17,312,629 | **17,294,386** |
+
+The file-order references are 17,780,730 (CM) and 16,637,907 (hybrid).
+
+**[E] Why B exists at all.** It is decoder latency. A decoder must run the NN one token at a time, because it needs token t before it can predict t + 1, and B streams let each forward pass carry B tokens. On the NN side, B makes little difference between 8 and 24 (20 MB prefix: B = 8: 4,770,852; B = 12: 4,755,647; B = 24: 4,768,825), and B = 32 is +1.25%. On the CM side, the cost falls steadily with B.
+
+**[H] So decoder speed buys compression.** A single-token forward pass that is fast enough to allow B = 2–4 would recover roughly 1.5–2.5% on the CM side. Today's PyTorch launches about 100 small kernels per step, so it is launch-bound at small B. A fused, deterministic custom kernel would also fix A2. Integer accumulation is exact in any order, so the encoder's batched forward and the decoder's incremental forward would give identical results. **This is the strongest argument for writing our own GPU engine.**
+
 ### F.3 What is genuinely good (keep it)
 
 - **[E] Deterministic CM math** (`dmath`). It is the right foundation. Most hobby CM ports get cross-platform float drift wrong.

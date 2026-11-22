@@ -16,7 +16,7 @@ run() {  # name tune args...
   XZIP_TUNE="$tune" ./target/release/xzip eval "$file" --bits "$bits" "$@" 2>/dev/null \
     | awk -v n="$name" '/^bytes/{print n "\t" $2}' > "$tmp/$name"
 }
-t0="sf=0${extra:+,$extra}"
+t0="sf=0,ind2s=0${extra:+,$extra}"
 run 1-file "$t0" &
 run 2-naive "$t0" --order "$order" &
 run 3-streams "$t0" --order "$order" --streams "$B" &

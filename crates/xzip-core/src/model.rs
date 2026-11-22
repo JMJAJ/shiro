@@ -385,7 +385,7 @@ impl Default for Tune {
             a5: 1,
             m7: 1,
             sf: 1,
-            ind2s: 0,
+            ind2s: 1,
         }
     }
 }
