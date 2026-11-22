@@ -46,7 +46,7 @@ fn main() {
     if args.len() < 3 {
         usage();
     }
-    let bits = flag(&args, "--bits").map(|v| v.parse().expect("--bits")).unwrap_or(22u32);
+    let bits = flag(&args, "--bits").map(|v| v.parse().expect("--bits")).unwrap_or(ModelConfig::default().table_bits);
     let cfg = ModelConfig { table_bits: bits };
     let t0 = Instant::now();
     match args[1].as_str() {

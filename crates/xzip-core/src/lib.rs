@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn roundtrip_text_and_edge_cases() {
-        let cfg = ModelConfig { table_bits: 18 };
+        let cfg = ModelConfig { table_bits: 14 };
         for data in [Vec::new(), vec![0u8], vec![255u8; 1000], sample()] {
             let c = compress(&data, &cfg);
             let d = decompress(&c).unwrap();
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn eval_matches_real_size() {
-        let cfg = ModelConfig { table_bits: 18 };
+        let cfg = ModelConfig { table_bits: 14 };
         let data = sample();
         let real = compress(&data, &cfg).len() as f64 - 13.0;
         let ideal = eval(&data, &cfg, |_, _| {}).total_bits / 8.0;
