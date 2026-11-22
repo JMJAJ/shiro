@@ -242,6 +242,13 @@ This track is out of scope until Phase 4's gate.
 | 11-22 | CM v1: checksummed nibble buckets, run model, inheritance, sparse + column contexts | 2,079,922 | |
 | 11-22 | CM v2: indirect bit-history, 2 match models, word trigram | 2,038,239 | |
 | 11-22 | CM v3: bracket, line-head and word-skip contexts, confidence inputs, char-class mixer, tuned learning rate | 1,993,246 | **18,160,029** (10.5 µs/B, 3.9 GB) |
+| 11-22 | NN only (d384, 6 layers, 23M params, vocab 16k, B=32) | 2,526,495 | 19,438,897 (26 min GPU) |
+| 11-22 | **Hybrid: CM v3 + NN** | 1,938,957 | **16,841,487** (Phase 1 gate 17.5 MB passed) |
+| 11-23 | CM v4: orders 12/16, indirect o2, c0-selected final mixer, word-length mixer, 12-bit o2 APM, learned final blend | 1,972,579 | 17,926,130 (11.7 µs/B) |
+| 11-23 | CM v4.1: XML-tag, number, sparse 1+3, markup-segment contexts; confidence-indexed history; o3 APM | 1,963,772 | 17,835,443 (13.1 µs/B, 5.9 GB) |
+| 11-23 | CM v4.2: mixer selected by c2c1 | 1,961,099 | |
+
+NN sweep (enwik7, NN-only): lr 1e-3 is best (2e-3 +0.5%, 3e-3 +1.1%); `--inner 2` −3.3% (2× time); `--B 8` −1.0%.
 
 Phase 2 groundwork is in place:
 - `nn/tokenizer.py`: reversible word tokenizer plus vocabulary trie.
