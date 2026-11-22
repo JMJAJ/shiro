@@ -18,6 +18,8 @@ import sys
 import time
 
 import numpy as np
+
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -89,12 +91,15 @@ class LM(nn.Module):
             nn.init.zeros_(b.o.weight)
             nn.init.zeros_(b.w3.weight)
 
-    def forward(self, idx):
+    def forward(self, idx, keep=None):
+        """keep: only compute output heads for the last `keep` positions."""
         T = idx.shape[1]
         x = self.emb(idx)
         cos, sin = self.cos[:, :T], self.sin[:, :T]
         for b in self.blocks:
             x = b(x, cos, sin)
+        if keep is not None:
+            x = x[:, -keep:]
         x = self.nf(x)
         return self.head(x), self.qhead(x)
 
@@ -255,8 +260,8 @@ def main():
             g["lr"] = lr
         for it in range(args.inner):
             with torch.autocast(dev.split(":")[0], dtype=torch.bfloat16):
-                logits, ql = model(inp)
-            lg = logits[:, T:].float()
+                logits, ql = model(inp, keep=T)
+            lg = logits.float()
             y = tgt[:, T:]
             valid = y != PAD
             loss_tok = F.cross_entropy(lg.reshape(-1, V), y.reshape(-1).clamp_max(V - 1), reduction="none").view(B, T)
@@ -279,7 +284,7 @@ def main():
                             rb = np.concatenate(rows)
                             rr = torch.from_numpy(np.concatenate(rt_local)).to(dev)
                             flat_l = lg.reshape(B * T, V)
-                            flat_q = ql[:, T:].reshape(B * T, 256)
+                            flat_q = ql.reshape(B * T, 256)
                             out = marg.bits(flat_l, flat_q, rr,
                                             torch.from_numpy(rnode[rb]).to(dev),
                                             torch.from_numpy(rkind[rb]).to(dev),
@@ -289,7 +294,7 @@ def main():
             qy = qt[:, T:]
             qmask = qy >= 0
             if qmask.any():
-                lq = F.cross_entropy(ql[:, T:].float()[qmask], qy[qmask])
+                lq = F.cross_entropy(ql.float()[qmask], qy[qmask])
             else:
                 lq = torch.zeros((), device=dev)
             loss = (loss_tok * valid).sum() / valid.sum().clamp_min(1) + args.qw * lq
