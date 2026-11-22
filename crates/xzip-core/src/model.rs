@@ -157,11 +157,10 @@ struct Apm {
 
 impl Apm {
     fn new(ctxs: usize, rate: f32) -> Self {
+        let row: Vec<f32> = (0..33).map(|j| squash32((j as f32 - 16.0) * 0.5)).collect();
         let mut t = Vec::with_capacity(ctxs * 33);
         for _ in 0..ctxs {
-            for j in 0..33 {
-                t.push(squash32((j as f32 - 16.0) * 0.5));
-            }
+            t.extend_from_slice(&row);
         }
         Apm { t, idx: 0, f: 0.0, rate }
     }
