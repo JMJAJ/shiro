@@ -180,6 +180,21 @@ tools/nnsweep.sh data/enwik7 "" "--inner 2"          # transformer-only sweep
 
 [tools/remote.py](tools/remote.py) syncs the tree to the test laptop and runs jobs there in the background. Connection details come from environment variables and are never written to disk.
 
+### The lab
+
+```sh
+XZIP_PASS=... python tools/dash/server.py      # then open http://127.0.0.1:8765
+```
+
+A local dashboard with four views. It serves on 127.0.0.1 only.
+
+- **Overview:** best results so far, progress charts for enwik7/8, and where the bytes go by region.
+- **Runs:** every run, from the local log and the laptop's logs, with config and region breakdown.
+- **Live:** CPU, RAM and GPU on the laptop, running processes, and job logs with progress bars.
+- **Formula lab:** write a formula in LaTeX, give it curves as expressions and parameters as sliders, and play. It comes seeded with the math the model actually uses: code length, squash/stretch, counter rates, logistic mixing, fusion cost, the learning-rate schedule, two-part MDL and online learning curves.
+
+Formulas and journal notes are saved to [tools/dash/lab.json](tools/dash/lab.json), so they're versioned with the code.
+
 ## Layout
 
 ```

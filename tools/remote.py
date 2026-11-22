@@ -70,6 +70,8 @@ def sync(c):
         for dirpath, dirnames, filenames in os.walk(ROOT):
             dirnames[:] = [d for d in dirnames if d not in EXCLUDE_DIRS]
             for f in filenames:
+                if f == "runs.jsonl":  # append-only on the box; never overwrite it
+                    continue
                 p = os.path.join(dirpath, f)
                 tar.add(p, arcname=os.path.relpath(p, ROOT).replace(os.sep, "/"))
         r = rev().encode()

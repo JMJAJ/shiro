@@ -1,0 +1,339 @@
+{
+ "formulas": [
+  {
+   "id": "codelen",
+   "title": "Code length of one bit",
+   "tag": "coding",
+   "tex": "L(p) = -\\log_2 p \\qquad \\mathbb{E}[L] = H(q,p) = -q\\log_2 p - (1-q)\\log_2(1-p)",
+   "exprs": [
+    "-log2(x)",
+    "-(q*log2(x) + (1-q)*log2(1-x))",
+    "H(q)"
+   ],
+   "x": [
+    0.001,
+    0.999
+   ],
+   "y": [
+    0,
+    6
+   ],
+   "params": [
+    {
+     "name": "q",
+     "min": 0.01,
+     "max": 0.99,
+     "step": 0.01,
+     "value": 0.8
+    }
+   ],
+   "notes": "Curve 1: the cost of coding a 1 at probability p. Curve 2: expected cost when the true P(1) is q. Its minimum, at p = q, touches curve 3 (the entropy). The gap is the KL divergence, the price of a miscalibrated model. Every APM/SSE stage in the CM exists to shrink that gap."
+  },
+  {
+   "id": "squash",
+   "title": "squash / stretch (logistic domain)",
+   "tag": "mixing",
+   "tex": "\\sigma(x) = \\frac{1}{1+e^{-x}} \\qquad \\operatorname{st}(p) = \\ln\\frac{p}{1-p}",
+   "exprs": [
+    "sq(k*x)",
+    "st(clamp(x/16+0.5, 1e-4, 1-1e-4))/16+0.5"
+   ],
+   "x": [
+    -8,
+    8
+   ],
+   "y": [
+    -0.1,
+    1.1
+   ],
+   "params": [
+    {
+     "name": "k",
+     "min": 0.1,
+     "max": 3,
+     "step": 0.05,
+     "value": 1
+    }
+   ],
+   "notes": "Mixers work in the stretch domain. Inputs are st(p_i), the output is sigma of a weighted sum. Curve 2 is stretch, rescaled to fit the same axes. xzip computes both with dmath, from basic IEEE operations only, so the encoder and decoder agree bit for bit."
+  },
+  {
+   "id": "counter",
+   "title": "Adaptive counter rate",
+   "tag": "counters",
+   "tex": "p \\leftarrow p + \\frac{y - p}{\\min(n, n_{max}) + \\delta}",
+   "exprs": [
+    "1/(min(x, nmax) + d)",
+    "1/(x + d)"
+   ],
+   "x": [
+    0,
+    300
+   ],
+   "y": [
+    0,
+    0.7
+   ],
+   "params": [
+    {
+     "name": "d",
+     "min": 1.0,
+     "max": 3.0,
+     "step": 0.05,
+     "value": 1.6
+    },
+    {
+     "name": "nmax",
+     "min": 10,
+     "max": 255,
+     "step": 1,
+     "value": 127
+    }
+   ],
+   "notes": "The slot update rate after n hits. With no cap (curve 2) the counter becomes an exact frequency count, which is optimal for stationary data. The cap n_max keeps it able to adapt. Tuned values: limit_hi = 127 for orders 3 and up, limit_lo = 250 for orders 0-2 (low orders are closer to stationary)."
+  },
+  {
+   "id": "mix2",
+   "title": "Logistic mixing of two models",
+   "tag": "fusion",
+   "tex": "p = \\sigma\\big(w_1\\,\\operatorname{st}(p_1) + w_2\\,\\operatorname{st}(p_2)\\big)",
+   "exprs": [
+    "sq(w1*st(x) + w2*st(p2))",
+    "x",
+    "p2"
+   ],
+   "x": [
+    0.001,
+    0.999
+   ],
+   "y": [
+    0,
+    1
+   ],
+   "params": [
+    {
+     "name": "p2",
+     "min": 0.01,
+     "max": 0.99,
+     "step": 0.01,
+     "value": 0.7
+    },
+    {
+     "name": "w1",
+     "min": -1,
+     "max": 2,
+     "step": 0.01,
+     "value": 0.6
+    },
+    {
+     "name": "w2",
+     "min": -1,
+     "max": 2,
+     "step": 0.01,
+     "value": 0.6
+    }
+   ],
+   "notes": "x is model 1's p1. Unlike linear averaging, logistic mixing with w1 + w2 > 1 can be MORE confident than either input when both agree. That is why a weak transformer still helps: when it agrees with the CM, the mix sharpens."
+  },
+  {
+   "id": "fusion",
+   "title": "Fusion: expected cost vs. weight on the NN",
+   "tag": "fusion",
+   "tex": "C(\\alpha) = H\\Big(q,\\; \\sigma\\big((1-\\alpha)\\operatorname{st}(p_{cm}) + \\alpha\\,\\operatorname{st}(p_{nn})\\big)\\Big)",
+   "exprs": [
+    "CE(q, sq((1-x)*st(pc) + x*st(pn)))",
+    "H(q)"
+   ],
+   "x": [
+    0,
+    1.5
+   ],
+   "y": [
+    0,
+    2
+   ],
+   "params": [
+    {
+     "name": "q",
+     "min": 0.01,
+     "max": 0.99,
+     "step": 0.01,
+     "value": 0.9
+    },
+    {
+     "name": "pc",
+     "min": 0.01,
+     "max": 0.99,
+     "step": 0.01,
+     "value": 0.6
+    },
+    {
+     "name": "pn",
+     "min": 0.01,
+     "max": 0.99,
+     "step": 0.01,
+     "value": 0.8
+    }
+   ],
+   "notes": "One context, truth q, CM says pc, NN says pn. The best alpha depends on which model is right in THIS context. That is why the mixer weights are selected by context (c0, c1, NN confidence bucket ...) instead of being one global alpha. Idea to test: select by the NN's own entropy (B1)."
+  },
+  {
+   "id": "lr",
+   "title": "Mixer learning-rate schedule",
+   "tag": "mixing",
+   "tex": "\\eta(t) = \\eta_{lo} + \\frac{\\eta_{hi}}{1 + t / t_0} \\qquad \\Delta w_i = \\eta\\,(y-p)\\,\\operatorname{st}(p_i)",
+   "exprs": [
+    "lo + hi/(1 + pow(10, x)/t0)"
+   ],
+   "x": [
+    3,
+    10
+   ],
+   "y": [
+    0,
+    0.012
+   ],
+   "params": [
+    {
+     "name": "hi",
+     "min": 0.001,
+     "max": 0.03,
+     "step": 0.0005,
+     "value": 0.01
+    },
+    {
+     "name": "lo",
+     "min": 0.0001,
+     "max": 0.005,
+     "step": 0.0001,
+     "value": 0.0015
+    },
+    {
+     "name": "t0",
+     "min": 100000,
+     "max": 10000000,
+     "step": 100000,
+     "value": 1048576
+    }
+   ],
+   "notes": "x = log10(bits seen). enwik8 is 8e8 bits (x = 8.9), enwik9 8e9 (x = 9.9). On enwik9 the schedule spends almost all of the file at eta_lo, so lo matters more there than in e7 sweeps."
+  },
+  {
+   "id": "mdl",
+   "title": "Two-part MDL: how big should the model be?",
+   "tag": "scaling",
+   "tex": "L_{total}(n) = \\underbrace{b\\,n}_{\\text{model bytes}} + \\frac{N}{8}\\Big(H_\\infty + A\\,(n/10^6)^{-\\alpha}\\Big)",
+   "exprs": [
+    "(b*pow(10,x) + N*(Hinf + A*pow(pow(10,x)/1e6, -al))/8)/1e6"
+   ],
+   "x": [
+    5,
+    9
+   ],
+   "y": [
+    80,
+    200
+   ],
+   "params": [
+    {
+     "name": "N",
+     "min": 10000000.0,
+     "max": 1000000000.0,
+     "step": 10000000.0,
+     "value": 1000000000.0
+    },
+    {
+     "name": "b",
+     "min": 0,
+     "max": 4,
+     "step": 0.1,
+     "value": 0.2
+    },
+    {
+     "name": "Hinf",
+     "min": 0.5,
+     "max": 1.0,
+     "step": 0.01,
+     "value": 0.72
+    },
+    {
+     "name": "A",
+     "min": 0,
+     "max": 2,
+     "step": 0.01,
+     "value": 0.6
+    },
+    {
+     "name": "al",
+     "min": 0.05,
+     "max": 0.8,
+     "step": 0.01,
+     "value": 0.25
+    }
+   ],
+   "notes": "x = log10(parameters), y = total MB, N = bytes of input. Toy power law, NOT fitted yet: fit Hinf, A and alpha from our own runs. With online learning (b = 0) the model is free but learns slowly. A stored prior (b > 0, bytes per parameter) learns nothing at decode time but costs space. Bet B5 is about where the minimum moves when b is small (quantized, shared blocks)."
+  },
+  {
+   "id": "online",
+   "title": "Online learning cost (prequential)",
+   "tag": "scaling",
+   "tex": "L_{preq}(N) = \\int_0^N \\Big(H_\\infty + A\\,t^{-\\beta}\\Big)\\,dt \\;\\Rightarrow\\; \\text{bpc}(N) = H_\\infty + \\frac{A\\,N^{-\\beta}}{1-\\beta}",
+   "exprs": [
+    "Hinf + A*pow(pow(10,x), -be)/(1-be)",
+    "Hinf + A*pow(pow(10,x), -be)"
+   ],
+   "x": [
+    6,
+    10
+   ],
+   "y": [
+    0.8,
+    2.6
+   ],
+   "params": [
+    {
+     "name": "Hinf",
+     "min": 0.5,
+     "max": 1.2,
+     "step": 0.01,
+     "value": 0.85
+    },
+    {
+     "name": "A",
+     "min": 1,
+     "max": 200,
+     "step": 1,
+     "value": 60
+    },
+    {
+     "name": "be",
+     "min": 0.05,
+     "max": 0.6,
+     "step": 0.01,
+     "value": 0.3
+    }
+   ],
+   "notes": "Curve 1: the average bpc over the whole file (what we pay). Curve 2: the instantaneous loss at the end. x = log10(bytes). Measured NN-only: 2.02 bpc on enwik7 and 1.555 on enwik8. Tune A and beta until curve 1 passes both, then read off the enwik9 prediction at x = 9."
+  }
+ ],
+ "notes": [
+  {
+   "id": "n1",
+   "ts": 1795392000,
+   "title": "Structure beats tuning",
+   "body": "Every parameter sweep has flattened out at ~0.1-0.2%. Every real step came from **structure**: a new context, a new way of selecting weights, or a new channel between the models.\n\nNext: stop sweeping, start building."
+  },
+  {
+   "id": "n2",
+   "ts": 1795392100,
+   "title": "The transformer is update-starved",
+   "body": "On enwik7: `--inner 2` gives -3.3%, `--B 8` -1.0%, and a higher lr is worse. The model wants more updates per token, not bigger steps.\n\nCandidates: replay (B2), encoder-steered training (B7), and a schedule that does more passes early, when the loss falls fastest."
+  },
+  {
+   "id": "n3",
+   "ts": 1795392200,
+   "title": "Open problem: determinism of the hybrid",
+   "body": "Hybrid numbers are code length, not an archive. The decoder must reproduce the GPU training **bit-exactly**. Options: deterministic kernels plus a fixed reduction order; integer/fixed-point training; or the CPU only. Has to be solved before any enwik9 claim."
+  }
+ ]
+}
