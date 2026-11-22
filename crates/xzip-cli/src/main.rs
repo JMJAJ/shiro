@@ -4,7 +4,7 @@ use xzip_core::{compress, decompress, eval, model::ModelConfig, regions};
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  xzip c <in> <out> [--bits N]\n  xzip d <in> <out>\n  xzip eval <in> [--bits N] [--log results.jsonl] [--note TEXT] [--rev SHA]"
+        "usage:\n  xzip c <in> <out> [--bits N]\n  xzip d <in> <out>\n  xzip eval <in> [--bits N] [--log results.jsonl] [--note TEXT] [--rev SHA] [--side FILE]"
     );
     std::process::exit(2)
 }
@@ -89,7 +89,12 @@ fn main() {
             let path = &args[2];
             let data = std::fs::read(path).expect("read input");
             let n = data.len();
-            let rep = eval(&data, &cfg, |pos, bits| {
+            let side: Option<Vec<u16>> = flag(&args, "--side").map(|sp| {
+                let raw = std::fs::read(&sp).expect("read side file");
+                assert_eq!(raw.len(), n * 16, "side file must hold 8 u16 per input byte");
+                raw.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect()
+            });
+            let rep = eval(&data, &cfg, side.as_deref(), |pos, bits| {
                 let el = t0.elapsed().as_secs_f64();
                 eprint!(
                     "\r  {:>6.1}%  {:.4} bpc  {:.0} ns/B   ",

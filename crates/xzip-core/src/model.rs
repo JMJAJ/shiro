@@ -359,7 +359,7 @@ impl Tune {
 const ORDERS: [u32; 7] = [1, 2, 3, 4, 5, 6, 8];
 const N_CTX: usize = 17;
 /// per context: slot, indirect, run, confidence; + 2x2 match + bias
-const N_IN: usize = 4 * N_CTX + 4 + 1;
+const N_IN: usize = 4 * N_CTX + 4 + 1 + 2; // + side (neural) input, present flag
 
 /// Coarse character class used for mixer selection.
 #[inline]
@@ -424,8 +424,10 @@ pub struct Model {
     mm: [MatchModel; 2],
     // mixing
     x: [f32; N_IN],
-    m1: [Mixer; 5],
-    x2: [f32; 6],
+    m1: [Mixer; 6],
+    x2: [f32; 8],
+    side: u16,
+    side_st: f32,
     m2: Mixer,
     a1: Apm,
     a2: Apm,
@@ -489,9 +491,12 @@ impl Model {
                 Mixer::new(N_IN, 256, w0),
                 Mixer::new(N_IN, 64, w0),
                 Mixer::new(N_IN, 512, w0),
+                Mixer::new(N_IN, 33 * 8, w0),
             ],
-            x2: [0.0; 6],
-            m2: Mixer::new(6, 8, 0.2),
+            x2: [0.0; 8],
+            side: 0,
+            side_st: 0.0,
+            m2: Mixer::new(8, 8, 0.15),
             a1: Apm::new(256, ar),
             a2: Apm::new(65536, ar),
             a3: Apm::new(65536, ar),
@@ -582,6 +587,13 @@ impl Model {
         }
     }
 
+    /// External (neural) prediction for the next bit: P(1) * 65536, 0 = none.
+    /// Must be set before every `predict` when used; it is cleared by `update`.
+    #[inline]
+    pub fn set_side(&mut self, p16: u16) {
+        self.side = p16;
+    }
+
     /// Probability that the next bit is 1, as a 24-bit integer.
     pub fn predict(&mut self) -> u32 {
         self.node = if self.bitpos < 4 {
@@ -619,6 +631,11 @@ impl Model {
         let s0 = self.mm[0].predict(&self.buf, self.c0, self.bitpos, &self.t, xa);
         let s1 = self.mm[1].predict(&self.buf, self.c0, self.bitpos, &self.t, xb);
         self.x[mi + 4] = 0.5;
+        let present = self.side != 0;
+        self.side_st = if present { self.t.st16(self.side) } else { 0.0 };
+        self.x[mi + 5] = self.side_st;
+        self.x[mi + 6] = if present { 0.5 } else { 0.0 };
+        let ssel = if present { 1 + ((self.side_st + 8.0) * 2.0).clamp(0.0, 31.0) as usize } else { 0 };
         let msel = if s1 > 0 { s1 } else { s0 };
 
         let c1 = self.c1() as usize;
@@ -629,7 +646,8 @@ impl Model {
         let d3 = self.m1[3].predict(&self.x, self.hits * 8 + self.bitpos as usize);
         let cls = cclass(c1 as u8) * 8 + cclass((self.c8 >> 8) as u8);
         let d4 = self.m1[4].predict(&self.x, cls * 8 + self.bitpos as usize);
-        self.x2 = [d0, d1, d2, d3, d4, 0.5];
+        let d5 = self.m1[5].predict(&self.x, ssel * 8 + self.bitpos as usize);
+        self.x2 = [d0, d1, d2, d3, d4, d5, self.side_st, 0.5];
         let d = self.m2.predict(&self.x2, self.bitpos as usize);
         let pm = self.m2.pr;
         let pa1 = self.a1.predict(d, c0);
@@ -645,6 +663,7 @@ impl Model {
 
     pub fn update(&mut self, bit: u32) {
         self.bits_seen += 1;
+        self.side = 0;
         let sn = self.node - 1;
         let (lim_lo, lim_hi) = (self.tune.limit_lo, self.tune.limit_hi);
         for i in 0..N_CTX {

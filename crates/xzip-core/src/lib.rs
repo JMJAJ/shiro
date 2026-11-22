@@ -68,7 +68,13 @@ pub struct EvalReport {
     pub region_bytes: [u64; regions::N_REGIONS],
 }
 
-pub fn eval(data: &[u8], cfg: &ModelConfig, mut progress: impl FnMut(usize, f64)) -> EvalReport {
+/// `side`: optional external per-bit predictions, 8 per byte (P(1)*65536, 0 = none).
+pub fn eval(
+    data: &[u8],
+    cfg: &ModelConfig,
+    side: Option<&[u16]>,
+    mut progress: impl FnMut(usize, f64),
+) -> EvalReport {
     let mut m = Model::new(cfg);
     let mut rc = regions::Classifier::new();
     let mut rep = EvalReport {
@@ -83,6 +89,9 @@ pub fn eval(data: &[u8], cfg: &ModelConfig, mut progress: impl FnMut(usize, f64)
         let mut cost = 0.0f64;
         for i in (0..8).rev() {
             let bit = ((byte >> i) & 1) as u32;
+            if let Some(sd) = side {
+                m.set_side(sd[pos * 8 + (7 - i)]);
+            }
             let p1 = m.predict() as f64 * scale;
             let p = if bit != 0 { p1 } else { 1.0 - p1 };
             cost -= p.log2();
@@ -132,7 +141,7 @@ mod tests {
         let cfg = ModelConfig { table_bits: 14, ..Default::default() };
         let data = sample();
         let real = compress(&data, &cfg).len() as f64 - 13.0;
-        let ideal = eval(&data, &cfg, |_, _| {}).total_bits / 8.0;
+        let ideal = eval(&data, &cfg, None, |_, _| {}).total_bits / 8.0;
         assert!((real - ideal).abs() < 16.0, "real {real} ideal {ideal}");
     }
 }
