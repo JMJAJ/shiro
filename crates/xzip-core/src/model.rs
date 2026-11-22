@@ -317,6 +317,8 @@ pub struct Tune {
     pub a5: u8,
     /// mixer selected by the previous two bytes
     pub m7: u8,
+    /// side (neural) prediction also enters the final blend: raw + APM(c0,c1)
+    pub sf: u8,
 }
 
 impl Default for Tune {
@@ -340,6 +342,7 @@ impl Default for Tune {
             ih: 1,
             a5: 1,
             m7: 1,
+            sf: 0,
         }
     }
 }
@@ -369,6 +372,7 @@ impl Tune {
                 "ih" => t.ih = f as u8,
                 "a5" => t.a5 = f as u8,
                 "m7" => t.m7 = f as u8,
+                "sf" => t.sf = f as u8,
                 _ => return Err(format!("unknown tune key {k}")),
             }
         }
@@ -476,7 +480,9 @@ pub struct Model {
     side_st: f32,
     m2: Mixer,
     fmx: Mixer,
-    xf: [f32; 7],
+    xf: [f32; 9],
+    a6: Apm,
+    a6on: bool,
     a1: Apm,
     a2: Apm,
     a3: Apm,
@@ -558,8 +564,10 @@ impl Model {
             side: 0,
             side_st: 0.0,
             m2: Mixer::new(10, 256, 0.15),
-            fmx: Mixer::new(7, 256, 0.2),
-            xf: [0.0; 7],
+            fmx: Mixer::new(9, 512, 0.2),
+            xf: [0.0; 9],
+            a6: Apm::new(65536, ar),
+            a6on: false,
             a1: Apm::new(256, ar),
             a2: Apm::new(65536, ar),
             a3: Apm::new(1 << 20, ar),
@@ -759,8 +767,15 @@ impl Model {
         if self.tune.fm != 0 {
             let st = |q: f32| dmath::stretch(q.clamp(1e-6, 1.0 - 1e-6) as f64) as f32;
             let pa5 = if self.tune.a5 != 0 { self.a5.predict(d, c0 | (self.a5ctx << 8)) } else { 0.5 };
-            self.xf = [st(pm), st(pa1), st(pa2), st(pa3), st(pa4), st(pa5), 0.5];
-            self.fmx.predict(&self.xf, c0);
+            self.a6on = self.tune.sf != 0 && present;
+            let (xs, xa6) = if self.a6on {
+                let q6 = self.a6.predict(self.side_st, c0 | (c1 << 8));
+                (self.side_st, st(q6))
+            } else {
+                (0.0, 0.0)
+            };
+            self.xf = [st(pm), st(pa1), st(pa2), st(pa3), st(pa4), st(pa5), xs, xa6, 0.5];
+            self.fmx.predict(&self.xf, c0 | ((present as usize) << 8));
             let q = self.fmx.pr;
             p = if self.tune.fm == 1 { q } else { 0.5 * (p + q) };
         }
@@ -798,6 +813,9 @@ impl Model {
         self.m2.update(&self.x2, bit, m2lr);
         if self.tune.fm != 0 {
             self.fmx.update(&self.xf, bit, m2lr * 0.5);
+            if self.a6on {
+                self.a6.update(bit);
+            }
         }
         self.a1.update(bit);
         self.a2.update(bit);
