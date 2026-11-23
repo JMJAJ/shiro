@@ -363,6 +363,14 @@ pub struct Tune {
     pub ind2s: u8,
     /// extra contexts: bit k enables context 24+k (see the context layout)
     pub xc: u32,
+    /// mixer 3 selected by the hit pattern of orders 1..7 (1) instead of the hit count (0)
+    pub m3p: u8,
+    /// extra match models with minimum length 8 and 32
+    pub mm3: u8,
+    /// adaptation limit for orders >= 5 (0 = same as limit_hi)
+    pub limit_xh: u8,
+    /// mixer selected by the current word's hash
+    pub mwh: u8,
 }
 
 impl Default for Tune {
@@ -389,6 +397,10 @@ impl Default for Tune {
             sf: 1,
             ind2s: 1,
             xc: 0,
+            m3p: 0,
+            mm3: 0,
+            limit_xh: 0,
+            mwh: 0,
         }
     }
 }
@@ -421,6 +433,10 @@ impl Tune {
                 "sf" => t.sf = f as u8,
                 "ind2s" => t.ind2s = f as u8,
                 "xc" => t.xc = f as u32,
+                "m3p" => t.m3p = f as u8,
+                "mm3" => t.mm3 = f as u8,
+                "limit_xh" => t.limit_xh = f as u8,
+                "mwh" => t.mwh = f as u8,
                 _ => return Err(format!("unknown tune key {k}")),
             }
         }
@@ -458,7 +474,7 @@ const ORDERS: [u32; 7] = [1, 2, 3, 4, 5, 6, 8];
 const N_CTX: usize = 32;
 const N_BASE: usize = 24;
 /// per context: slot, indirect, run, confidence; + 2x2 match + bias
-const N_IN: usize = 4 * N_CTX + 4 + 1 + 2; // + side (neural) input, present flag
+const N_IN: usize = 4 * N_CTX + 4 + 1 + 2 + 4; // + side (neural) input, present flag, 2 extra match models
 
 /// Coarse character class used for mixer selection.
 #[inline]
@@ -569,6 +585,7 @@ pub struct Model {
     b0: [usize; N_CTX],
     b0chk: [u16; N_CTX],
     hits: usize,
+    hpat: usize,
     node: usize,
     // indirect (bit-history) maps
     hidx: [usize; N_CTX],
@@ -581,11 +598,12 @@ pub struct Model {
     ridx: [usize; N_CTX],
     runmap: Vec<Slot>,
     // match models
-    mm: [MatchModel; 2],
+    mm: [MatchModel; 4],
+    nmm: usize,
     // mixing
     x: [f32; N_IN],
-    m1: [Mixer; 8],
-    x2: [f32; 10],
+    m1: [Mixer; 9],
+    x2: [f32; 11],
     wlen: usize,
     tag: u64,
     in_tag: bool,
@@ -667,6 +685,7 @@ impl Model {
             b0: [0; N_CTX],
             b0chk: [0; N_CTX],
             hits: 0,
+            hpat: 0,
             node: 1,
             hidx: [0; N_CTX],
             imap: vec![SLOT0; N_CTX * 1024],
@@ -676,19 +695,26 @@ impl Model {
             rexp: [0; N_CTX],
             ridx: [0; N_CTX],
             runmap: vec![SLOT0; N_CTX * 16],
-            mm: [MatchModel::new(5, 22), MatchModel::new(16, 22)],
+            mm: [
+                MatchModel::new(5, 22),
+                MatchModel::new(16, 22),
+                MatchModel::new(8, if cfg.tune.mm3 != 0 { 22 } else { 1 }),
+                MatchModel::new(32, if cfg.tune.mm3 != 0 { 22 } else { 1 }),
+            ],
+            nmm: if cfg.tune.mm3 != 0 { 4 } else { 2 },
             x: [0.0; N_IN],
             m1: [
                 Mixer::new(N_IN, 256, w0),
                 Mixer::new(N_IN, 64, w0),
                 Mixer::new(N_IN, 256, w0),
-                Mixer::new(N_IN, 64, w0),
+                Mixer::new(N_IN, 1024, w0),
                 Mixer::new(N_IN, 512, w0),
                 Mixer::new(N_IN, 33 * 8, w0),
                 Mixer::new(N_IN, 16 * 8 * 8, w0),
                 Mixer::new(N_IN, 65536, w0),
+                Mixer::new(N_IN, if cfg.tune.mwh != 0 { 4096 } else { 1 }, w0),
             ],
-            x2: [0.0; 10],
+            x2: [0.0; 11],
             wlen: 0,
             tag: 0,
             in_tag: false,
@@ -699,7 +725,7 @@ impl Model {
             seg_pos: 0,
             side: 0,
             side_st: 0.0,
-            m2: Mixer::new(10, 256, 0.15),
+            m2: Mixer::new(11, 256, 0.15),
             fmx: Mixer::new(9, 512, 0.2),
             xf: [0.0; 9],
             a6: Apm::new(65536, ar),
@@ -835,6 +861,7 @@ impl Model {
     fn nibble_lookup(&mut self, first: bool) {
         let salt = if first { 0 } else { self.c0 as u64 + 0x100 };
         let mut hits = 0;
+        let mut hpat = 0;
         let act = self.act;
         for &i in &act[..self.nact] {
             let h = if first { self.ctx[i] } else { hash2(self.ctx[i], salt) };
@@ -857,11 +884,13 @@ impl Model {
                 self.rrun[i] = if new { 0 } else { bk.run };
                 if !new && (1..=7).contains(&i) {
                     hits += 1;
+                    hpat |= 1 << (i - 1);
                 }
             }
         }
         if first {
             self.hits = hits;
+            self.hpat = hpat;
         }
     }
 
@@ -992,6 +1021,12 @@ impl Model {
         let (xa, xb) = self.x[mi..mi + 4].split_at_mut(2);
         let s0 = self.mm[0].predict(self.c0, self.bitpos, &self.t, xa);
         let s1 = self.mm[1].predict(self.c0, self.bitpos, &self.t, xb);
+        if self.nmm > 2 {
+            let me = 4 * N_CTX + 7;
+            let (xc_, xd) = self.x[me..me + 4].split_at_mut(2);
+            self.mm[2].predict(self.c0, self.bitpos, &self.t, xc_);
+            self.mm[3].predict(self.c0, self.bitpos, &self.t, xd);
+        }
         self.x[mi + 4] = 0.5;
         let present = self.side != 0;
         self.side_st = if present { self.t.st16(self.side) } else { 0.0 };
@@ -1005,7 +1040,8 @@ impl Model {
         let d0 = self.m1[0].predict(&self.x, c0);
         let d1 = self.m1[1].predict(&self.x, msel.min(63));
         let d2 = self.m1[2].predict(&self.x, c1);
-        let d3 = self.m1[3].predict(&self.x, self.hits * 8 + self.bitpos as usize);
+        let s3 = if self.tune.m3p != 0 { self.hpat } else { self.hits };
+        let d3 = self.m1[3].predict(&self.x, s3 * 8 + self.bitpos as usize);
         let cls = cclass(c1 as u8) * 8 + cclass((self.c8 >> 8) as u8);
         let d4 = self.m1[4].predict(&self.x, cls * 8 + self.bitpos as usize);
         let d5 = self.m1[5].predict(&self.x, ssel * 8 + self.bitpos as usize);
@@ -1016,7 +1052,8 @@ impl Model {
             0.0
         };
         let d7 = if self.tune.m7 != 0 { self.m1[7].predict(&self.x, (self.c8 & 0xffff) as usize) } else { 0.0 };
-        self.x2 = [d0, d1, d2, d3, d4, d5, d6, d7, self.side_st, 0.5];
+        let d8 = if self.tune.mwh != 0 { self.m1[8].predict(&self.x, (hash2(self.word, 131) >> 52) as usize) } else { 0.0 };
+        self.x2 = [d0, d1, d2, d3, d4, d5, d6, d7, self.side_st, 0.5, d8];
         let s2 = if self.tune.m2sel == 1 { c0 } else { self.bitpos as usize };
         let d = self.m2.predict(&self.x2, s2);
         let pm = self.m2.pr;
@@ -1052,8 +1089,15 @@ impl Model {
         let sn = self.node - 1;
         let (lim_lo, lim_hi) = (self.tune.limit_lo, self.tune.limit_hi);
         let act = self.act;
+        let lim_xh = if self.tune.limit_xh != 0 { self.tune.limit_xh } else { lim_hi };
         for &i in &act[..self.nact] {
-            let limit = if i <= 2 { lim_lo } else { lim_hi };
+            let limit = if i <= 2 {
+                lim_lo
+            } else if (5..=7).contains(&i) || i == 17 || i == 18 || i == 29 {
+                lim_xh
+            } else {
+                lim_hi
+            };
             let ix = self.cur[i];
             slot_update(&mut self.tables[i][ix].s[sn], bit, &self.t, limit);
             slot_update(&mut self.imap[self.hidx[i]], bit, &self.t, 255);
@@ -1061,7 +1105,8 @@ impl Model {
                 slot_update(&mut self.runmap[self.ridx[i]], (bit == self.rexp[i]) as u32, &self.t, 255);
             }
         }
-        for m in self.mm.iter_mut() {
+        let nmm = self.nmm;
+        for m in self.mm[..nmm].iter_mut() {
             m.update(bit, &self.t);
         }
         let tn = &self.tune;
@@ -1073,6 +1118,9 @@ impl Model {
         }
         if self.tune.m7 != 0 {
             self.m1[7].update(&self.x, bit, lr);
+        }
+        if self.tune.mwh != 0 {
+            self.m1[8].update(&self.x, bit, lr);
         }
         self.m2.update(&self.x2, bit, m2lr);
         if self.tune.fm != 0 {
@@ -1220,7 +1268,7 @@ impl Model {
                     saved[k].as_ref().map(|h| &h.lb[..]).unwrap_or(&[])
                 }
             };
-            for m in self.mm.iter_mut() {
+            for m in self.mm[..self.nmm].iter_mut() {
                 m.end_byte(&get);
             }
         }
