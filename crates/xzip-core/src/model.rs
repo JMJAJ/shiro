@@ -371,6 +371,8 @@ pub struct Tune {
     pub limit_xh: u8,
     /// mixer selected by the current word's hash
     pub mwh: u8,
+    /// per-context map (slot p, hit count) -> p replaces the confidence input; value = rate * 1000
+    pub pa: u16,
 }
 
 impl Default for Tune {
@@ -401,6 +403,7 @@ impl Default for Tune {
             mm3: 0,
             limit_xh: 0,
             mwh: 0,
+            pa: 0,
         }
     }
 }
@@ -437,6 +440,7 @@ impl Tune {
                 "mm3" => t.mm3 = f as u8,
                 "limit_xh" => t.limit_xh = f as u8,
                 "mwh" => t.mwh = f as u8,
+                "pa" => t.pa = f as u16,
                 _ => return Err(format!("unknown tune key {k}")),
             }
         }
@@ -586,6 +590,7 @@ pub struct Model {
     b0chk: [u16; N_CTX],
     hits: usize,
     hpat: usize,
+    pam: Vec<Apm>,
     node: usize,
     // indirect (bit-history) maps
     hidx: [usize; N_CTX],
@@ -686,6 +691,11 @@ impl Model {
             b0chk: [0; N_CTX],
             hits: 0,
             hpat: 0,
+            pam: if cfg.tune.pa != 0 {
+                (0..N_CTX).map(|_| Apm::new(8, cfg.tune.pa as f32 / 1000.0)).collect()
+            } else {
+                Vec::new()
+            },
             node: 1,
             hidx: [0; N_CTX],
             imap: vec![SLOT0; N_CTX * 1024],
@@ -1014,7 +1024,22 @@ impl Model {
                 self.ralive[i] = false;
                 self.x[2 * N_CTX + i] = 0.0;
             }
-            self.x[3 * N_CTX + i] = (s.p as f32 - 32768.0) * (1.0 / 16384.0);
+            self.x[3 * N_CTX + i] = if self.tune.pa != 0 {
+                let nb = match s.n {
+                    0 => 0,
+                    1 => 1,
+                    2 => 2,
+                    3..=4 => 3,
+                    5..=8 => 4,
+                    9..=16 => 5,
+                    17..=40 => 6,
+                    _ => 7,
+                };
+                let q = self.pam[i].predict(self.x[i], nb);
+                self.t.st16((q * 65535.0) as u16)
+            } else {
+                (s.p as f32 - 32768.0) * (1.0 / 16384.0)
+            };
         }
 
         let mi = 4 * N_CTX;
@@ -1101,6 +1126,9 @@ impl Model {
             let ix = self.cur[i];
             slot_update(&mut self.tables[i][ix].s[sn], bit, &self.t, limit);
             slot_update(&mut self.imap[self.hidx[i]], bit, &self.t, 255);
+            if self.tune.pa != 0 {
+                self.pam[i].update(bit);
+            }
             if self.ralive[i] {
                 slot_update(&mut self.runmap[self.ridx[i]], (bit == self.rexp[i]) as u32, &self.t, 255);
             }
