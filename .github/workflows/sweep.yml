@@ -40,7 +40,7 @@ jobs:
           python3 - <<'EOF' >> "$GITHUB_OUTPUT"
           import json, os
           rows = []
-          for i, line in enumerate(l.strip() for l in os.environ["RUNS"].replace("\\n", "\n").splitlines()):
+          for line in (l.strip() for l in os.environ["RUNS"].replace(";", "\n").splitlines()):
               if not line:
                   continue
               ref, _, tune = line.partition(" ")
@@ -144,7 +144,7 @@ jobs:
               print("no results"); raise SystemExit
           base = rs[0]["out"] if rs[0]["i"] == 0 else None
           print(f"### ${{ inputs.file }} bits=${{ inputs.bits }} order=`${{ inputs.order }}` ${{ inputs.label }}\n")
-          print("| # | ref | tune | bytes | vs #0 | bpc | text | link | µs/B | rev |")
+          print("| # | ref | tune | bytes | vs #0 | bpc | text | link | us/B | rev |")
           print("|---|---|---|---|---|---|---|---|---|---|")
           for r in sorted(rs, key=lambda r: r["out"]):
               d = f"{(r['out'] - base) * 100 / base:+.3f}%" if base else ""
