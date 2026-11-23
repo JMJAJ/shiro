@@ -48,8 +48,11 @@ jobs:
           rows = []
           for line in (l.strip() for l in os.environ["RUNS"].replace(";", "\n").splitlines()):
               if line:
-                  ref, _, env = line.partition(" ")
-                  rows.append({"i": len(rows), "ref": ref, "env": " ".join(env.split())})
+                  ref, _, rest = line.partition(" ")
+                  toks = rest.split()
+                  defs = " ".join(t for t in toks if t.startswith("-D"))
+                  env = " ".join(t for t in toks if not t.startswith("-D"))
+                  rows.append({"i": len(rows), "ref": ref, "env": env, "defs": defs})
           assert 1 <= len(rows) <= 40
           print("matrix=" + json.dumps({"include": rows}))
           EOF
@@ -62,7 +65,7 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 355
-    name: "${{ matrix.i }} ${{ matrix.ref }} ${{ matrix.env }}"
+    name: "${{ matrix.i }} ${{ matrix.ref }} ${{ matrix.defs }} ${{ matrix.env }}"
     steps:
       - run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
@@ -74,6 +77,15 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends clang-18 lld-18 llvm-18 libclang-rt-18-dev gawk zstd >/dev/null
           clang++-18 --version | head -1
+      - name: Build defines
+        id: defs
+        run: |
+          {
+            echo '// xzip research build overrides, written by .github/workflows/cmx.yml'
+            echo '#pragma once'
+            for d in ${{ matrix.defs }}; do d=${d#-D}; echo "#define ${d%%=*} ${d#*=}"; done
+          } > x/cmx/src/xz_build.h
+          cat x/cmx/src/xz_build.h
       - name: Build cache
         id: bc
         uses: actions/cache@v4
@@ -94,6 +106,7 @@ jobs:
             done
           fi
           mkdir -p ../../bin && cd ../../bin
+          set -o pipefail
           /usr/bin/time -v bash ../x/cmx/build.sh 2>&1 | tail -40
           cp ../x/cmx/weights-*.c? .
           ls -la
@@ -148,7 +161,7 @@ jobs:
           m = re.search(r"(\d+) bytes -> (\d+) bytes in ([\d.]+) s", log)
           rss = re.search(r"Maximum resident set size \(kbytes\): (\d+)", log)
           r = {"i": ${{ matrix.i }}, "ref": "${{ matrix.ref }}", "env": "${{ matrix.env }}", "mb": ${{ inputs.mb }},
-               "exit": int(sys.argv[1]), "in": int(m.group(1)) if m else 0, "out": int(m.group(2)) if m else 0,
+               "defs": "${{ matrix.defs }}", "exit": int(sys.argv[1]), "in": int(m.group(1)) if m else 0, "out": int(m.group(2)) if m else 0,
                "secs": float(m.group(3)) if m else 0.0, "rss_mb": int(rss.group(1)) // 1024 if rss else 0,
                "rev": os.popen("git -C ../x rev-parse --short HEAD").read().strip(),
                "cpu": open("/proc/cpuinfo").read().split("model name")[1].split(":")[1].split("\n")[0].strip()}
@@ -178,11 +191,11 @@ jobs:
           rs = sorted((json.loads(l) for l in open("all.jsonl") if l.strip()), key=lambda r: r["i"])
           base = next((r["out"] for r in rs if r["i"] == 0 and r["out"]), None)
           print("### cmx screen ${{ inputs.mb }} MB ${{ inputs.label }}\n")
-          print("| # | ref | env | bytes | vs #0 | s | RSS MB | exit | rev |")
-          print("|---|---|---|---|---|---|---|---|---|")
+          print("| # | ref | build | env | bytes | vs #0 | s | RSS MB | exit | rev |")
+          print("|---|---|---|---|---|---|---|---|---|---|")
           for r in sorted(rs, key=lambda r: (r["out"] == 0, r["out"])):
               d = f"{(r['out'] - base):+,} ({(r['out'] - base) * 100 / base:+.3f}%)" if base and r["out"] else ""
-              print(f"| {r['i']} | {r['ref']} | `{r['env']}` | {r['out']:,} | {d} | {r['secs']:.0f} | {r['rss_mb']} | {r['exit']} | {r['rev']} |")
+              print(f"| {r['i']} | {r['ref']} | `{r.get('defs', '')}` | `{r['env']}` | {r['out']:,} | {d} | {r['secs']:.0f} | {r['rss_mb']} | {r['exit']} | {r['rev']} |")
           EOF
       - uses: actions/upload-artifact@v4
         with:
