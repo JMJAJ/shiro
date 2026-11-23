@@ -146,10 +146,20 @@ impl Mixer {
     fn predict(&mut self, x: &[f32], sel: usize) -> f32 {
         self.sel = sel * self.n;
         let w = &self.w[self.sel..self.sel + self.n];
-        let mut d = 0.0f32;
-        for i in 0..self.n {
-            d += w[i] * x[i];
+        // 8 independent partial sums in a fixed order: deterministic and vectorisable
+        let mut acc = [0.0f32; 8];
+        let (wc, wr) = w.split_at(self.n & !7);
+        let (xc, xr) = x[..self.n].split_at(self.n & !7);
+        for (wv, xv) in wc.chunks_exact(8).zip(xc.chunks_exact(8)) {
+            for k in 0..8 {
+                acc[k] += wv[k] * xv[k];
+            }
         }
+        let mut tail = 0.0f32;
+        for (a, b) in wr.iter().zip(xr) {
+            tail += a * b;
+        }
+        let d = ((acc[0] + acc[1]) + (acc[2] + acc[3])) + ((acc[4] + acc[5]) + (acc[6] + acc[7])) + tail;
         self.dot = d.clamp(-15.0, 15.0);
         self.pr = squash32(self.dot);
         self.dot
@@ -189,6 +199,24 @@ impl Apm {
         self.f = pos - j as f32;
         self.idx = ctx * 33 + j;
         self.t[self.idx] * (1.0 - self.f) + self.t[self.idx + 1] * self.f
+    }
+    /// Hint the row `predict(_, ctx)` will read (no effect on results).
+    #[inline]
+    fn prefetch(&self, ctx: usize) {
+        #[cfg(target_arch = "x86_64")]
+        {
+            use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
+            let i = (ctx * 33).min(self.t.len() - 33);
+            // SAFETY: i + 32 < t.len(); prefetch never faults
+            unsafe {
+                let p = self.t.as_ptr().add(i) as *const i8;
+                _mm_prefetch(p, _MM_HINT_T0);
+                _mm_prefetch(p.add(64), _MM_HINT_T0);
+                _mm_prefetch(p.add(128), _MM_HINT_T0);
+            }
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        let _ = ctx;
     }
     #[inline]
     fn update(&mut self, bit: u32) {
@@ -1027,6 +1055,11 @@ impl Model {
         } else if self.bitpos == 4 {
             self.nibble_lookup(false);
         }
+        // the big APMs' next rows are known now: start fetching them
+        let (c0, c1) = (self.c0 as usize, self.c1() as usize);
+        self.a2.prefetch(c0 | (c1 << 8));
+        self.a3.prefetch(c0 | (self.a3ctx << 8));
+        self.a5.prefetch(c0 | (self.a5ctx << 8));
     }
 
     fn end_byte(&mut self, b: u8) {
