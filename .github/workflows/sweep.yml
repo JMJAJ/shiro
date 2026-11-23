@@ -44,7 +44,11 @@ jobs:
               if not line:
                   continue
               ref, _, tune = line.partition(" ")
-              rows.append({"i": len(rows), "ref": ref, "tune": tune.strip()})
+              # "bits=N" inside the tune spec overrides the table bits for that run
+              items = [t for t in tune.replace(" ", "").split(",") if t]
+              bits = [t.split("=")[1] for t in items if t.startswith("bits=")]
+              tune = ",".join(t for t in items if not t.startswith("bits="))
+              rows.append({"i": len(rows), "ref": ref, "tune": tune, "bits": bits[-1] if bits else ""})
           assert 1 <= len(rows) <= 40, "1..40 runs"
           print("matrix=" + json.dumps({"include": rows}))
           EOF
@@ -70,7 +74,7 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ubuntu-latest
     timeout-minutes: 300
-    name: "${{ matrix.i }} ${{ matrix.ref }} ${{ matrix.tune }}"
+    name: "${{ matrix.i }} ${{ matrix.ref }} ${{ matrix.tune }} ${{ matrix.bits }}"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -109,13 +113,13 @@ jobs:
           XZIP_TUNE: ${{ matrix.tune }}
         run: |
           mkdir -p out
-          ./x/target/release/xzip eval data/in --bits ${{ inputs.bits }} $EXTRA \
+          ./x/target/release/xzip eval data/in --bits ${{ matrix.bits || inputs.bits }} $EXTRA \
             --log out/run.jsonl --rev "$(git -C x rev-parse --short HEAD)" \
             --note "${{ matrix.ref }}" 2>/dev/null | tee out/result.txt
           python3 - <<'EOF'
           import json
           r = json.loads(open("out/run.jsonl").read())
-          r.update(i=${{ matrix.i }}, ref="${{ matrix.ref }}", tune="""${{ matrix.tune }}""",
+          r.update(i=${{ matrix.i }}, ref="${{ matrix.ref }}", tune="""${{ matrix.tune }}""", bits=${{ matrix.bits || inputs.bits }},
                    file="${{ inputs.file }}", order="${{ inputs.order }}", cpu=open("/proc/cpuinfo").read().split("model name")[1].split(":")[1].split("\n")[0].strip())
           open("out/run.jsonl", "w").write(json.dumps(r) + "\n")
           EOF
@@ -144,13 +148,13 @@ jobs:
               print("no results"); raise SystemExit
           base = rs[0]["out"] if rs[0]["i"] == 0 else None
           print(f"### ${{ inputs.file }} bits=${{ inputs.bits }} order=`${{ inputs.order }}` ${{ inputs.label }}\n")
-          print("| # | ref | tune | bytes | vs #0 | bpc | text | link | us/B | rev |")
-          print("|---|---|---|---|---|---|---|---|---|---|")
+          print("| # | ref | tune | bits | bytes | vs #0 | bpc | text | link | us/B | rev |")
+          print("|---|---|---|---|---|---|---|---|---|---|---|")
           for r in sorted(rs, key=lambda r: r["out"]):
               d = f"{(r['out'] - base) * 100 / base:+.3f}%" if base else ""
               g = r["regions"]
               bp = lambda k: f"{g[k][1] * 8 / max(1, g[k][0]):.4f}"
-              print(f"| {r['i']} | {r['ref']} | `{r['tune']}` | {r['out']:,} | {d} | {r['bpc']:.5f} | {bp('text')} | {bp('link')} | {r['secs'] * 1e6 / r['in']:.1f} | {r['rev']} |")
+              print(f"| {r['i']} | {r['ref']} | `{r['tune']}` | {r['bits']} | {r['out']:,} | {d} | {r['bpc']:.5f} | {bp('text')} | {bp('link')} | {r['secs'] * 1e6 / r['in']:.1f} | {r['rev']} |")
           EOF
       - uses: actions/upload-artifact@v4
         with:
