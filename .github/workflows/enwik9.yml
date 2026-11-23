@@ -1,0 +1,84 @@
+# CPU-only enwik9 CM evals on GitHub-hosted runners (no GPU: the NN half of the
+# hybrid can't run here). Each job is capped by GitHub at 6 h, so eval runs under
+# `timeout` and its once-per-MiB progress lines are kept as one line each: a run
+# that doesn't finish still leaves cumulative bpc at every MiB in the log artifact.
+name: enwik9 CM eval
+
+on:
+  workflow_dispatch:
+    inputs:
+      bits:
+        description: "table bits"
+        default: "22"
+      tune:
+        description: "XZIP_TUNE (empty = defaults)"
+        default: ""
+
+jobs:
+  eval:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [file, decodable-B24-T256]
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+
+      - name: Cache enwik9
+        id: data
+        uses: actions/cache@v4
+        with:
+          path: data/enwik9
+          key: enwik9-v1
+
+      - name: Download enwik9
+        if: steps.data.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p data
+          curl -sSfL -o /tmp/enwik9.zip http://mattmahoney.net/dc/enwik9.zip
+          unzip -q /tmp/enwik9.zip -d data
+          rm /tmp/enwik9.zip
+
+      - name: Check enwik9
+        run: |
+          test "$(stat -c %s data/enwik9)" = 1000000000
+          sha256sum data/enwik9
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Decodable order
+        if: matrix.variant != 'file'
+        run: |
+          pip install --quiet numpy
+          python tools/schedule.py data/enwik9 /tmp/enwik9.order --B 24 --T 256
+
+      - name: Eval
+        env:
+          XZIP_TUNE: ${{ inputs.tune }}
+        run: |
+          mkdir -p out
+          extra=""
+          [ "${{ matrix.variant }}" = file ] || extra="--order /tmp/enwik9.order --streams 24"
+          # stop 8 min before GitHub's 6 h cap so the artifact still uploads
+          left=$(( JOB_START + 352*60 - $(date +%s) ))
+          echo "eval budget: $(( left / 60 )) min"
+          set +e
+          timeout -s INT "$left" ./target/release/xzip eval data/enwik9 --bits ${{ inputs.bits }} $extra \
+            --log out/runs.jsonl --rev "$(git rev-parse --short HEAD)" \
+            --note "gha enwik9 ${{ matrix.variant }} bits=${{ inputs.bits }} tune=${{ inputs.tune }}" \
+            2>&1 > out/result.txt | tr '\r' '\n' | tee out/progress.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          cat out/result.txt
+          echo "last progress: $(grep -v '^ *$' out/progress.txt | tail -1)"
+          nproc; lscpu | grep 'Model name'
+          [ $code = 0 ] || echo "::warning::eval exited $code (124 = timed out); partial numbers are in progress.txt"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: enwik9-${{ matrix.variant }}
+          path: out/
