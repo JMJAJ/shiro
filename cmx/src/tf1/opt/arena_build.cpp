@@ -91,7 +91,11 @@ void OptModel::load(const char* weights_path) {
     const int32_t want[11] = {V, D, NL, DH, NH, DMLP, ATTN_WIN,
                               DH, NH, 4, 10000};
     for (int i = 0; i < 11; i++)
+#if defined(XZ_ATTN_WIN)
+      if (i != 6 && ci[i] != want[i]) msg_stop(184);   // xzip: the window may differ from the trained one
+#else
       if (ci[i] != want[i]) msg_stop(184);
+#endif
     const int32_t* ck = wf.T(TID("config.kimi")).i32();
     for (int i = 0; i < NL; i++)
       if ((ck[i] != 0) != KIMI_L[i]) msg_stop(185);

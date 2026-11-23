@@ -79,6 +79,7 @@
 // also drives the group-skip fast path.
 #pragma once
 
+#include "../../xz_build.h"
 #include <cstdint>
 
 namespace fx2 {
@@ -89,7 +90,11 @@ namespace opt {
 // [3]=number of per-head iterations profiled
 extern uint64_t g_attn_prof[4];
 
+#if defined(XZ_ATTN_WIN)
+constexpr int ATTN_WIN = XZ_ATTN_WIN;   // xzip build override (src/xz_build.h): wider than trained
+#else
 constexpr int ATTN_WIN = 2048;
+#endif
 static_assert(ATTN_WIN % 16 == 0 && ATTN_WIN >= 256,
               "ATTN_WIN must be a multiple of ATTN_BLK (16).");
 constexpr int ATTN_NH = 3;
