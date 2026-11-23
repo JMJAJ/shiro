@@ -1,0 +1,17 @@
+PRODUCTION ENCODE prod_A1, written 2026-11-14T07:31:16Z
+command: cd <encode dir> && taskset -c 10 nice -n 10 env -i PATH=/usr/bin:/bin HOME=<encode dir> TMPDIR=<encode dir>/tmp LC_ALL=C LANG=C TZ=UTC ./comp9
+         (no arguments; ./enwik9 -> <enwik9>, sha1 2996e86fb978f93cca8f566cc56998923e7fe581; ./comp9 = copy of <certified build>/comp9, 4057131 B, sha256 8d2a5fd03da10e671286726ab620183c0b6072ba68021c03076304e29f80406a)
+encoder exit code: 0; wall 340598 s (front end 401 s)
+check 1 (coder stream): yes: PASS 2026-11-10T09:01:24Z archive9.cmix.temp 501062281 B sha256 c35d3073eeba70f22a2e08a50202b53eb95466e3e9f1f2702f6f9b3f96fd8718
+flush checks against <research-build 18 MB payload>: flush1=PASS@788s flush2=PASS@1882s flush3=PASS@5758s
+archive9: 88983124 B sha256 0b65bc79917f84b78f4974a2dc94d4d4c3fc6c0c53234bdcb6c282db802635a3
+total (comp9 + archive9): 93040255 B
+peak RSS of the encoder pid: 25473304 KiB
+free disk: at launch 85993480192 B, low-water mark 71976480768 B (drop 14016999424 B) (host-wide memory readings omitted)
+--- engine.stdout:
+decoding article order: 40703 bytes -> 40694 bytes in 9.74 s.
+decoding dictionary hints: 45782 bytes -> 47166 bytes in 10.49 s.
+dictionary: Loaded 54857 words
+encoding preprocessed enwik9: 797096359 bytes -> 85039910 bytes in 340549.82 s.
+--- engine.stderr (tail):
+(progress lines removed)
