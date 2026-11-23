@@ -1,0 +1,59 @@
+# cmx research program
+
+The goal is a smaller enwik9 total than the LTCB leaders, starting from their engine. The `cmx/` directory on branch `cmx` holds ex-girlfriend 2.0 (GPL-3, the cmix → cmix-lex → cmix-neif lineage; credits in `cmx/NOTICE.md`). Screens run on free GitHub Actions runners (`.github/workflows/cmx.yml`). Full enwik9 runs (50–95 h per direction) do not fit there.
+
+## How to run an experiment
+
+```sh
+# one run per ';'-separated entry: <git ref> [-DNAME=VAL build define ...] [ENV=VAL runtime knob ...]
+gh workflow run cmx.yml -f mode=screen -f mb=30 -f label="what this tests" \
+  -f runs="cmx <baseline config>;cmx <baseline config> <one change>;..."
+gh run download <id> -n summary        # table.md + all.jsonl -> results/gha/cmx-<id>.jsonl
+```
+
+- **Stream.** The coder stream is the preprocessed enwik9, 501,062,281 B, sha256 `c35d3073…`. It is identical to upstream's (`mode=stream` rebuilds it into the `cmxstream-v1` cache). A screen codes its first `mb` MB with `comp9 -n`.
+- **Cost and time.** 30 MB codes to about 4.94 MB and takes 1.6–3.3 h per runner, depending on which CPU the runner gets. With 20 runners in parallel, 50 MB is the practical maximum under the 6 h job cap.
+- **Determinism and noise.** The same config gives the same bytes on every runner (baseline 4,940,203 reproduced 3×). Upstream quotes a ±200 B perturbation floor on 50 MB between near-identical builds, so treat differences under about 200 B as noise.
+- **Build defines** (`-DXZ_*`, see `cmx/src/xz_build.h`):
+  - SEMCACHE geometry and thresholds: `XZ_SEM_{M,FLIP,NLOG,WHLOG,PRE,DEDUPLOG,L,B,K,G,WTMAX,GAP,TE3,QPE3,SPE3,LRE6}`
+  - attention window: `XZ_ATTN_WIN`
+- **Runtime knobs.** The `CMX_*` / `BITL_SEQ` knobs are documented in `cmx/src/cmx_meas.h`.
+- **Screens under-read memory components.** Upstream got about 20 KB on 50 MB but 378 KB on the full file, because SEMCACHE gains grow as it fills. Rank changes by screen, but never extrapolate them linearly.
+- **Memory limit.** The target box (the user's PC) has 16 GB, so the release config must stay under about 15 GB. ex-girlfriend's full recipe needs 24 GB.
+
+## Results so far (30 MB screens, vs cmix-neif 2.0 defaults = 4,940,203 B)
+
+| Config | RSS | Δ |
+|---|---|---|
+| **best so far:** `-DXZ_SEM_M=31 -DXZ_SEM_FLIP=7 -DXZ_SEM_PRE=512 -DXZ_SEM_DEDUPLOG=10 -DXZ_SEM_GAP=256 -DXZ_SEM_SPE3=985 CMX_SEMKEYS=R,10 CMX_FW_BLOCKS=4 BITL_SEQ=0` | 14.6 GB | **−3,201** |
+| ex-girlfriend wide geometry + gap 256 + store 985 + FW4 + BITL0 | 12.0 GB | −3,128 |
+| ex-girlfriend wide geometry + FW4 + BITL0 | 12.0 GB | −2,802 |
+| ex-girlfriend R,12 cache + FW4 + BITL0 (narrow geometry) | 12.0 GB | −1,943 |
+| extra cache layer: 10 −635 · 11 −556 · 13 −525 · 12 −444 · 15 +210 · R,12,9 +147 | | |
+| on the wide geometry: gap 256 −152 · store 985 −149 · G=7 −21 · QPE 999 −5 · TE 14/28 +270 | | |
+
+Raw data is in `results/gha/cmx-*.jsonl`.
+
+## Backlog
+
+Ranked by (expected gain × chance) ÷ cost. The status column tracks each item.
+
+| # | Idea | Source / basis | Status |
+|---|---|---|---|
+| 1 | Attention window beyond the trained 2048 (2560/3072/4096) at inference | neif-2.0 README §6: 2560 = −13 KB at 39 % on neif-1.0 | screening (batch 5) |
+| 2 | Per-row mixer LR decay (`CMX_ROWDECAY=1/2`) | cmix-wolf-2 PRL lever (part of its −28.7 KB) | screening (batch 5) |
+| 3 | Medium geometry × cache layer × gap × ring sizes around the best config | batches 1–3 | screening (batch 4) |
+| 4 | Enlarged fxcm text-model tables (memory headroom vs Hutter's 10 GB) | ex-girlfriend 1.0 (not adopted by neif-2.0); lex-transformer: maps halved = +0.11 % | todo: find the table-size constants |
+| 5 | PPMd memory up (+2.2 GB = −0.24 % in lex-transformer) | cmix-lex-transformer writeup | todo |
+| 6 | Port cmix-views' models: recurrent word-history state (32-d, ≤16 transitions), extra prediction views with bounded calibration, word-residual correction, cubic disagreement interactions, double-indirect contexts | cmix-views −248 KB vs beehive (part of that is ex-girlfriend 1.0 work we already have) | todo: big port; diff vs beehive is 2,354 lines |
+| 7 | RATA-CMIX models: GrammarMatch, MorphologyMatch, MATCHTRUST (8-bit match-outcome history as StateMap context), SPECIALIST (context-gated corrector after SSE) | RATA-CMIX (fx2-cmix-T base, different lineage) | todo: read source |
+| 8 | Online 2×200 LSTM expert (RATA) or an online adapter on the frozen transformer (LoRA-style, deterministic CPU) | RATA-CMIX, dynamic evaluation (Krause et al. 2018) | idea |
+| 9 | SEMCACHE improvements past "search effort": exact re-rank over more candidates (lift the `kPre <= 512` assertion), cache keyed on attention outputs, kNN over SEMCACHE + match hybrid (RetoMaton pointers) | ex-girlfriend README: the cache is search-limited | idea |
+| 10 | Mixer math: Adam/RMS-normalised updates, weight averaging (Polyak), mixture-of-experts gating by transformer confidence | paq8px/cmix lineage; GLN (Veness et al.) | idea |
+| 11 | SSE/APM chain: 2D interpolated SSE on (p, transformer entropy), final-stage logistic regression on stretch(p) pairs | paq8px APM chains | idea |
+| 12 | Article order v2: order by transformer-embedding similarity (needs a new order block + new stream) | STARLIT/phda ordering; P9 in RESEARCH.md | idea, heavy |
+| 13 | Two-pass parameter selection: the encoder tries k knob settings per page and codes the choice (log₂ k bits/page) | P5 "encoder-steered" in RESEARCH.md | idea |
+
+## Log
+
+- 2026-11-23: imported ex-girlfriend 2.0; CI build 9 min; stream reproduced bit-exact; batches 1–3 done (table above); batches 4–5 running.
