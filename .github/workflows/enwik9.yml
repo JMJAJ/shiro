@@ -13,13 +13,16 @@ on:
       tune:
         description: "XZIP_TUNE (empty = defaults)"
         default: ""
+      variants:
+        description: "JSON list from: file, decodable-B24-T256"
+        default: '["file", "decodable-B24-T256"]'
 
 jobs:
   eval:
     strategy:
       fail-fast: false
       matrix:
-        variant: [file, decodable-B24-T256]
+        variant: ${{ fromJSON(inputs.variants) }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -53,7 +56,8 @@ jobs:
         if: matrix.variant != 'file'
         run: |
           pip install --quiet numpy
-          python tools/schedule.py data/enwik9 /tmp/enwik9.order --B 24 --T 256
+          /usr/bin/time -v python tools/schedule.py data/enwik9 /tmp/enwik9.order --B 24 --T 256 2>&1 | grep -E 'ranges|Maximum resident|Elapsed'
+          test -s /tmp/enwik9.order
 
       - name: Eval
         env:
