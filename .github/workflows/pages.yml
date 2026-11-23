@@ -1,0 +1,71 @@
+# The public lab page (GitHub Pages): results, screens, live runs, math.
+# Rebuilt on every push of results or site code, whenever a sweep / cmx / enwik9 run
+# finishes (its summary artifact is pulled in directly, no commit needed), and every
+# 30 minutes for the live view. The page also polls the GitHub API in the browser.
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths: ["results/**", "site/**", "tools/site/**", ".github/workflows/pages.yml"]
+  workflow_run:
+    workflows: ["sweep", "cmx", "enwik9 CM eval"]
+    types: [completed]
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  actions: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Actions runs and their summaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          : > /tmp/m.json
+          for wf in sweep.yml cmx.yml enwik9.yml; do
+            gh run list -R "$GITHUB_REPOSITORY" --workflow "$wf" -L 200 \
+              --json databaseId,displayTitle,status,conclusion,createdAt,updatedAt,workflowName,url >> /tmp/m.json || true
+          done
+          jq -s 'add // []' /tmp/m.json > runs_meta.json
+          mkdir -p fetched
+          for id in $(jq -r '.[] | select(.status == "completed") | .databaseId' runs_meta.json); do
+            [ -f "results/gha/$id.jsonl" ] || [ -f "results/gha/cmx-$id.jsonl" ] && continue
+            gh run download -R "$GITHUB_REPOSITORY" "$id" -n summary -D "fetched/$id" >/dev/null 2>&1 || rm -rf "fetched/$id"
+          done
+          echo '{' > jobs.json; first=1
+          for id in $(jq -r '.[] | select(.status != "completed") | .databaseId' runs_meta.json); do
+            j=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?per_page=60" --jq '.jobs | map({name, status, conclusion, started_at})' 2>/dev/null || echo '[]')
+            [ $first = 1 ] || echo ',' >> jobs.json; first=0
+            printf '"%s": %s' "$id" "$j" >> jobs.json
+          done
+          echo '}' >> jobs.json
+          git fetch -q --depth 1 origin cmx && git show origin/cmx:cmx/doc/stream_rate.tsv > stream_rate.tsv || true
+          ls fetched | wc -l
+      - name: Build site
+        run: python3 tools/site/build.py --out _site --meta runs_meta.json --fetched fetched --jobs jobs.json --stream-rate stream_rate.tsv
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.d.outputs.page_url }}
+    steps:
+      - id: d
+        uses: actions/deploy-pages@v4

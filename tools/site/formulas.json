@@ -1,0 +1,412 @@
+[
+ {
+  "id": "codelen",
+  "title": "Code length of one bit",
+  "tag": "coding",
+  "tex": "L(p) = -\\log_2 p \\qquad \\mathbb{E}[L] = H(q,p) = -q\\log_2 p - (1-q)\\log_2(1-p)",
+  "exprs": [
+   "-log2(x)",
+   "-(q*log2(x) + (1-q)*log2(1-x))",
+   "H(q)"
+  ],
+  "x": [
+   0.001,
+   0.999
+  ],
+  "y": [
+   0,
+   6
+  ],
+  "params": [
+   {
+    "name": "q",
+    "min": 0.01,
+    "max": 0.99,
+    "step": 0.01,
+    "value": 0.8
+   }
+  ]
+ },
+ {
+  "id": "squash",
+  "title": "squash / stretch (logistic domain)",
+  "tag": "mixing",
+  "tex": "\\sigma(x) = \\frac{1}{1+e^{-x}} \\qquad \\operatorname{st}(p) = \\ln\\frac{p}{1-p}",
+  "exprs": [
+   "sq(k*x)",
+   "st(clamp(x/16+0.5, 1e-4, 1-1e-4))/16+0.5"
+  ],
+  "x": [
+   -8,
+   8
+  ],
+  "y": [
+   -0.1,
+   1.1
+  ],
+  "params": [
+   {
+    "name": "k",
+    "min": 0.1,
+    "max": 3,
+    "step": 0.05,
+    "value": 1
+   }
+  ]
+ },
+ {
+  "id": "counter",
+  "title": "Adaptive counter rate",
+  "tag": "counters",
+  "tex": "p \\leftarrow p + \\frac{y - p}{\\min(n, n_{max}) + \\delta}",
+  "exprs": [
+   "1/(min(x, nmax) + d)",
+   "1/(x + d)"
+  ],
+  "x": [
+   0,
+   300
+  ],
+  "y": [
+   0,
+   0.7
+  ],
+  "params": [
+   {
+    "name": "d",
+    "min": 1,
+    "max": 3,
+    "step": 0.05,
+    "value": 1.6
+   },
+   {
+    "name": "nmax",
+    "min": 10,
+    "max": 255,
+    "step": 1,
+    "value": 127
+   }
+  ]
+ },
+ {
+  "id": "mix2",
+  "title": "Logistic mixing of two models",
+  "tag": "fusion",
+  "tex": "p = \\sigma\\big(w_1\\,\\operatorname{st}(p_1) + w_2\\,\\operatorname{st}(p_2)\\big)",
+  "exprs": [
+   "sq(w1*st(x) + w2*st(p2))",
+   "x",
+   "p2"
+  ],
+  "x": [
+   0.001,
+   0.999
+  ],
+  "y": [
+   0,
+   1
+  ],
+  "params": [
+   {
+    "name": "p2",
+    "min": 0.01,
+    "max": 0.99,
+    "step": 0.01,
+    "value": 0.7
+   },
+   {
+    "name": "w1",
+    "min": -1,
+    "max": 2,
+    "step": 0.01,
+    "value": 0.6
+   },
+   {
+    "name": "w2",
+    "min": -1,
+    "max": 2,
+    "step": 0.01,
+    "value": 0.6
+   }
+  ]
+ },
+ {
+  "id": "fusion",
+  "title": "Fusion: expected cost vs. weight on the NN",
+  "tag": "fusion",
+  "tex": "C(\\alpha) = H\\Big(q,\\; \\sigma\\big((1-\\alpha)\\operatorname{st}(p_{cm}) + \\alpha\\,\\operatorname{st}(p_{nn})\\big)\\Big)",
+  "exprs": [
+   "CE(q, sq((1-x)*st(pc) + x*st(pn)))",
+   "H(q)"
+  ],
+  "x": [
+   0,
+   1.5
+  ],
+  "y": [
+   0,
+   2
+  ],
+  "params": [
+   {
+    "name": "q",
+    "min": 0.01,
+    "max": 0.99,
+    "step": 0.01,
+    "value": 0.9
+   },
+   {
+    "name": "pc",
+    "min": 0.01,
+    "max": 0.99,
+    "step": 0.01,
+    "value": 0.6
+   },
+   {
+    "name": "pn",
+    "min": 0.01,
+    "max": 0.99,
+    "step": 0.01,
+    "value": 0.8
+   }
+  ]
+ },
+ {
+  "id": "lr",
+  "title": "Mixer learning-rate schedule",
+  "tag": "mixing",
+  "tex": "\\eta(t) = \\eta_{lo} + \\frac{\\eta_{hi}}{1 + t / t_0} \\qquad \\Delta w_i = \\eta\\,(y-p)\\,\\operatorname{st}(p_i)",
+  "exprs": [
+   "lo + hi/(1 + pow(10, x)/t0)"
+  ],
+  "x": [
+   3,
+   10
+  ],
+  "y": [
+   0,
+   0.012
+  ],
+  "params": [
+   {
+    "name": "hi",
+    "min": 0.001,
+    "max": 0.03,
+    "step": 0.0005,
+    "value": 0.01
+   },
+   {
+    "name": "lo",
+    "min": 0.0001,
+    "max": 0.005,
+    "step": 0.0001,
+    "value": 0.0015
+   },
+   {
+    "name": "t0",
+    "min": 100000,
+    "max": 10000000,
+    "step": 100000,
+    "value": 1048576
+   }
+  ]
+ },
+ {
+  "id": "mdl",
+  "title": "Two-part MDL: how big should the model be?",
+  "tag": "scaling",
+  "tex": "L_{total}(n) = \\underbrace{b\\,n}_{\\text{model bytes}} + \\frac{N}{8}\\Big(H_\\infty + A\\,(n/10^6)^{-\\alpha}\\Big)",
+  "exprs": [
+   "(b*pow(10,x) + N*(Hinf + A*pow(pow(10,x)/1e6, -al))/8)/1e6"
+  ],
+  "x": [
+   5,
+   9
+  ],
+  "y": [
+   80,
+   200
+  ],
+  "params": [
+   {
+    "name": "N",
+    "min": 10000000,
+    "max": 1000000000,
+    "step": 10000000,
+    "value": 1000000000
+   },
+   {
+    "name": "b",
+    "min": 0,
+    "max": 4,
+    "step": 0.1,
+    "value": 0.2
+   },
+   {
+    "name": "Hinf",
+    "min": 0.5,
+    "max": 1,
+    "step": 0.01,
+    "value": 0.72
+   },
+   {
+    "name": "A",
+    "min": 0,
+    "max": 2,
+    "step": 0.01,
+    "value": 0.6
+   },
+   {
+    "name": "al",
+    "min": 0.05,
+    "max": 0.8,
+    "step": 0.01,
+    "value": 0.25
+   }
+  ]
+ },
+ {
+  "id": "online",
+  "title": "Online learning cost (prequential)",
+  "tag": "scaling",
+  "tex": "L_{preq}(N) = \\int_0^N \\Big(H_\\infty + A\\,t^{-\\beta}\\Big)\\,dt \\;\\Rightarrow\\; \\text{bpc}(N) = H_\\infty + \\frac{A\\,N^{-\\beta}}{1-\\beta}",
+  "exprs": [
+   "Hinf + A*pow(pow(10,x), -be)/(1-be)",
+   "Hinf + A*pow(pow(10,x), -be)"
+  ],
+  "x": [
+   6,
+   10
+  ],
+  "y": [
+   0.8,
+   2.6
+  ],
+  "params": [
+   {
+    "name": "Hinf",
+    "min": 0.5,
+    "max": 1.2,
+    "step": 0.01,
+    "value": 0.85
+   },
+   {
+    "name": "A",
+    "min": 1,
+    "max": 200,
+    "step": 1,
+    "value": 60
+   },
+   {
+    "name": "be",
+    "min": 0.05,
+    "max": 0.6,
+    "step": 0.01,
+    "value": 0.3
+   }
+  ]
+ },
+ {
+  "id": "knn",
+  "title": "SEMCACHE neighbour weight",
+  "tag": "retrieval",
+  "tex": "P(b)=\\frac{\\sum_{i:\\,y_i=b} e^{s_i/T}}{\\sum_i e^{s_i/T}} \\qquad s_i=\\cos(k, k_i)",
+  "exprs": [
+   "exp((x-1)/T)",
+   "exp((x-1)/(2*T))",
+   "exp((x-1)/(T/2))"
+  ],
+  "x": [
+   0.5,
+   1
+  ],
+  "y": [
+   0,
+   1
+  ],
+  "params": [
+   {
+    "name": "T",
+    "min": 0.005,
+    "max": 0.1,
+    "step": 0.001,
+    "value": 0.02
+   }
+  ]
+ },
+ {
+  "id": "simhash",
+  "title": "SimHash recall of a neighbour",
+  "tag": "retrieval",
+  "tex": "P_{\\text{table}}=\\Big(1-\\tfrac{\\theta}{\\pi}\\Big)^{B} \\qquad P_{\\text{found}}=1-\\Big(1-P_{\\text{table}}\\Big)^{L},\\; \\theta=\\arccos s",
+  "exprs": [
+   "1-pow(1-pow(1-acos(x)/PI,B),L)",
+   "pow(1-acos(x)/PI,B)",
+   "1-pow(1-pow(1-acos(x)/PI,B),L*(1+F))"
+  ],
+  "x": [
+   0.5,
+   1
+  ],
+  "y": [
+   0,
+   1
+  ],
+  "params": [
+   {
+    "name": "B",
+    "min": 4,
+    "max": 24,
+    "step": 1,
+    "value": 18
+   },
+   {
+    "name": "L",
+    "min": 1,
+    "max": 32,
+    "step": 1,
+    "value": 16
+   },
+   {
+    "name": "F",
+    "min": 0,
+    "max": 17,
+    "step": 1,
+    "value": 3
+   }
+  ]
+ },
+ {
+  "id": "screen",
+  "title": "Cache gain vs. coded prefix",
+  "tag": "scaling",
+  "tex": "G(n)\\approx G_\\infty\\Big(1-e^{-n/\\tau}\\Big)\\,n \\qquad \\text{(a store that pays as it fills)}",
+  "exprs": [
+   "Ginf*(1-exp(-pow(10,x)/tau))*pow(10,x)/1e6"
+  ],
+  "x": [
+   6,
+   8.7
+  ],
+  "y": [
+   0,
+   0
+  ],
+  "params": [
+   {
+    "name": "Ginf",
+    "min": 0.0001,
+    "max": 0.003,
+    "step": 0.0001,
+    "value": 0.0008
+   },
+   {
+    "name": "tau",
+    "min": 1000000.0,
+    "max": 500000000.0,
+    "step": 1000000.0,
+    "value": 100000000.0
+   }
+  ]
+ }
+]

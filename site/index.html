@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>xzip lab</title>
+<meta name="description" content="Live results of the xzip enwik9 compression research: screens, sweeps, stream rate and the math behind the models.">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root {
+  --bg: #0b0b0c; --panel: #131315; --panel-2: #18181b; --border: #242428; --border-2: #2f2f35;
+  --text: #e7e7ea; --muted: #8e8e97; --faint: #5d5d66;
+  --accent: #8b7cf6; --ok: #4ade80; --warn: #fbbf24; --err: #f87171;
+  --c1: #8b7cf6; --c2: #38bdf8; --c3: #4ade80; --c4: #fbbf24; --c5: #f472b6; --c6: #a3a3ad;
+  --grid: #1f1f23;
+  --font: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --bg: #f7f7f8; --panel: #ffffff; --panel-2: #f1f1f4; --border: #e3e3e8; --border-2: #d4d4db;
+  --text: #17171a; --muted: #5f5f6a; --faint: #8f8f99; --grid: #ececf0;
+  --accent: #6d5ce8; --c1: #6d5ce8; --c2: #0284c7; --c3: #16a34a; --c4: #d97706; --c5: #db2777; --c6: #6b7280;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f7f7f8; --panel: #ffffff; --panel-2: #f1f1f4; --border: #e3e3e8; --border-2: #d4d4db;
+    --text: #17171a; --muted: #5f5f6a; --faint: #8f8f99; --grid: #ececf0;
+    --accent: #6d5ce8; --c1: #6d5ce8; --c2: #0284c7; --c3: #16a34a; --c4: #d97706; --c5: #db2777; --c6: #6b7280;
+    color-scheme: light;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--font); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--border); }
+.bar { max-width: 1180px; margin: 0 auto; padding: 10px 16px; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.brand { font-weight: 650; letter-spacing: -.01em; }
+.brand span { color: var(--muted); font-weight: 400; }
+nav { display: flex; gap: 4px; flex-wrap: wrap; }
+nav a { color: var(--muted); padding: 4px 10px; border-radius: 6px; font-size: 13px; }
+nav a:hover { color: var(--text); background: var(--panel-2); text-decoration: none; }
+.sp { flex: 1; }
+.stamp { color: var(--faint); font: 12px var(--mono); }
+main { max-width: 1180px; margin: 0 auto; padding: 8px 16px 64px; }
+section { padding-top: 28px; scroll-margin-top: 56px; }
+h2 { font-size: 15px; font-weight: 600; margin: 0 0 12px; letter-spacing: -.01em; }
+h2 .sub { color: var(--muted); font-weight: 400; margin-left: 8px; font-size: 13px; }
+.grid { display: grid; gap: 12px; }
+.g4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 860px) { .g4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .g2 { grid-template-columns: 1fr; } }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; min-width: 0; }
+.card-h { padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.card-h .sub { color: var(--muted); font-weight: 400; }
+.card-b { padding: 12px 14px; }
+.kpi .v { font: 600 22px/1.2 var(--mono); letter-spacing: -.02em; }
+.kpi .l { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.kpi .d { font: 12px var(--mono); margin-top: 2px; }
+.good { color: var(--ok); } .bad { color: var(--err); } .muted { color: var(--muted); }
+.chart { position: relative; height: 300px; }
+.chart.tall { height: 420px; }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.tabs button { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 3px 9px; border-radius: 6px; font: 12px var(--font); cursor: pointer; }
+.tabs button.on { background: var(--panel-2); color: var(--text); border-color: var(--border-2); }
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; }
+td.num, th.num { text-align: right; font-family: var(--mono); white-space: nowrap; }
+td.cfg { font-family: var(--mono); font-size: 11.5px; color: var(--muted); word-break: break-word; }
+.tbl { overflow-x: auto; }
+.live-run { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.live-run:last-child { border-bottom: 0; }
+.live-run .t { font-weight: 600; font-size: 13px; }
+.jobs { display: flex; gap: 3px; flex-wrap: wrap; margin-top: 8px; }
+.job { width: 14px; height: 14px; border-radius: 3px; background: var(--border-2); }
+.job.in_progress { background: var(--c2); animation: pulse 1.6s ease-in-out infinite; }
+.job.success { background: var(--ok); } .job.failure { background: var(--err); } .job.cancelled { background: var(--faint); }
+@keyframes pulse { 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .job.in_progress { animation: none; } }
+.empty { color: var(--muted); padding: 18px 14px; font-size: 13px; }
+.math-grid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 860px) { .math-grid { grid-template-columns: 1fr; } }
+.f-tex { overflow-x: auto; padding: 4px 0 8px; }
+.f-plot { position: relative; height: 220px; }
+.f-plot canvas { width: 100%; height: 100%; display: block; }
+.f-read { position: absolute; right: 8px; top: 6px; font: 11px/1.45 var(--mono); color: var(--muted); white-space: pre; pointer-events: none; text-align: right; }
+.params { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; align-items: center; margin-top: 10px; font: 12px var(--mono); }
+.params input { width: 100%; accent-color: var(--accent); }
+.tag { font: 11px var(--mono); color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; font: 11px var(--mono); color: var(--muted); margin-top: 6px; }
+.legend i { display: inline-block; width: 10px; height: 2px; vertical-align: middle; margin-right: 5px; }
+button.icon { background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 6px; padding: 3px 8px; cursor: pointer; font: 12px var(--font); }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <div class="brand">xzip <span>lab</span></div>
+    <nav>
+      <a href="#overview">Overview</a><a href="#live">Live</a><a href="#screens">Screens</a>
+      <a href="#sweeps">CM sweeps</a><a href="#stream">Stream</a><a href="#math">Math</a>
+    </nav>
+    <div class="sp"></div>
+    <span class="stamp" id="stamp"></span>
+    <button class="icon" id="theme" title="Toggle theme">◐</button>
+  </div>
+</header>
+<main>
+  <section id="overview">
+    <div class="grid g4" id="kpis"></div>
+    <div class="card" style="margin-top:12px">
+      <div class="card-h">enwik9 archive size <span class="sub">MB, lower is better</span></div>
+      <div class="card-b"><div class="chart" id="ltcb-wrap"><canvas id="ltcb"></canvas></div></div>
+    </div>
+  </section>
+
+  <section id="live">
+    <h2>Running on GitHub Actions <span class="sub" id="live-sub"></span></h2>
+    <div class="card" id="live-list"><div class="empty">Loading…</div></div>
+  </section>
+
+  <section id="screens">
+    <h2>cmx screens <span class="sub">change in coded bytes against each batch's first run</span></h2>
+    <div class="card">
+      <div class="card-h"><div class="tabs" id="screen-tabs"></div></div>
+      <div class="card-b"><div class="cfg muted" id="screen-chart-shared" style="font:11.5px var(--mono);margin-bottom:8px;word-break:break-word"></div><div class="chart tall"><canvas id="screen-chart"></canvas></div></div>
+      <div class="tbl" id="screen-table"></div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <div class="card-h">Best configuration per batch <span class="sub">30 MB screens, bytes</span></div>
+      <div class="card-b"><div class="chart"><canvas id="best-chart"></canvas></div></div>
+    </div>
+  </section>
+
+  <section id="sweeps">
+    <h2>xzip CM sweeps <span class="sub">own Rust engine, enwik7 / enwik8</span></h2>
+    <div class="card">
+      <div class="card-h"><div class="tabs" id="sweep-tabs"></div></div>
+      <div class="card-b"><div class="cfg muted" id="sweep-chart-shared" style="font:11.5px var(--mono);margin-bottom:8px;word-break:break-word"></div><div class="chart tall"><canvas id="sweep-chart"></canvas></div></div>
+      <div class="tbl" id="sweep-table"></div>
+    </div>
+  </section>
+
+  <section id="stream">
+    <h2>Coder stream rate <span class="sub">cmix-neif 2.0, full enwik9 run, 0.1 % windows</span></h2>
+    <div class="grid g2">
+      <div class="card"><div class="card-h">Bits per stream byte <span class="sub">position in MB of the 501 MB stream</span></div>
+        <div class="card-b"><div class="chart"><canvas id="stream-chart"></canvas></div></div></div>
+      <div class="card"><div class="card-h">Where the bytes go <span class="sub">own CM, largest enwik run</span></div>
+        <div class="card-b"><div class="chart"><canvas id="region-chart"></canvas></div></div></div>
+    </div>
+  </section>
+
+  <section id="math">
+    <h2>Math <span class="sub">drag the sliders; hover a plot to read values</span></h2>
+    <div class="math-grid" id="math-grid"></div>
+  </section>
+</main>
+<script>
+const REPO = "JMJAJ/xzip";
+const $ = s => document.querySelector(s);
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const fmt = n => n == null ? "—" : n.toLocaleString("en-US");
+const mb = n => (n / 1e6).toFixed(2);
+let D = null, charts = {};
+
+function palette() { return ["--c1", "--c2", "--c3", "--c4", "--c5", "--c6"].map(css); }
+function chart(id, cfg) {
+  if (charts[id]) charts[id].destroy();
+  const c = css("--muted"), g = css("--grid");
+  Chart.defaults.color = c; Chart.defaults.borderColor = g; Chart.defaults.font.family = css("--font");
+  charts[id] = new Chart(document.getElementById(id), cfg);
+}
+function ago(iso) {
+  if (!iso) return "";
+  const s = (Date.now() - Date.parse(iso)) / 1000;
+  if (s < 90) return Math.round(s) + " s ago";
+  if (s < 5400) return Math.round(s / 60) + " min ago";
+  if (s < 172800) return (s / 3600).toFixed(1) + " h ago";
+  return Math.round(s / 86400) + " d ago";
+}
+
+// ---------------- overview ----------------
+function bestCmx() {
+  let best = null;
+  for (const s of D.sweeps.filter(s => s.kind === "cmx" && s.mb === 30))
+    for (const r of s.rows) if (!best || r.bytes < best.bytes) best = { ...r, sweep: s };
+  return best;
+}
+function renderOverview() {
+  const e9 = D.runs.filter(r => r.file === "enwik9").sort((a, b) => a.out - b.out);
+  const e8 = D.runs.filter(r => r.file === "enwik8" && r.kind !== "nn").sort((a, b) => a.out - b.out);
+  const b = bestCmx();
+  const base30 = 4940203;
+  const k = [
+    { v: mb(D.ltcb[0].bytes) + " MB", l: "LTCB #1 · " + D.ltcb[0].name },
+    { v: mb(D.ltcb[D.ltcb.length - 1].bytes) + " MB", l: "top-10 cutoff" },
+    { v: b ? fmt(b.bytes) : "—", l: "best cmx screen · 30 MB of the stream",
+      d: b ? `<span class="good">${(b.bytes - base30).toLocaleString("en-US")} B vs cmix-neif 2.0</span>` : "" },
+    { v: e8.length ? mb(e8[0].out) + " MB" : "—", l: "own CM · enwik8",
+      d: e9.length ? `<span class="muted">enwik9 ${mb(e9.find(r => /file/.test(r.note))?.out || e9[0].out)} MB</span>` : "" },
+  ];
+  $("#kpis").innerHTML = k.map(x => `<div class="card kpi"><div class="card-b"><div class="v">${x.v}</div><div class="l">${x.l}</div>${x.d ? `<div class="d">${x.d}</div>` : ""}</div></div>`).join("");
+  const own = e9.map(r => ({ name: "xzip CM · " + r.note.replace(/^gha enwik9 /, "").replace(/ bits=.*/, ""), bytes: r.out, own: true }));
+  const rows = [...D.ltcb, ...own].sort((a, b) => a.bytes - b.bytes);
+  const P = palette();
+  $("#ltcb-wrap").style.height = Math.max(260, rows.length * 30 + 40) + "px";
+  chart("ltcb", {
+    type: "bar",
+    data: { labels: rows.map(r => r.name), datasets: [{ data: rows.map(r => r.bytes / 1e6), backgroundColor: rows.map(r => r.own ? P[3] : P[0] + "cc"), borderRadius: 3 }] },
+    options: { indexAxis: "y", maintainAspectRatio: false, plugins: { legend: { display: false },
+      tooltip: { callbacks: { label: c => fmt(Math.round(c.raw * 1e6)) + " B" } } },
+      scales: { x: { min: 80, title: { display: true, text: "MB" } }, y: { grid: { display: false } } } },
+  });
+}
+
+// ---------------- live ----------------
+async function renderLive() {
+  let runs = null;
+  try {
+    const r = await fetch(`https://api.github.com/repos/${REPO}/actions/runs?per_page=30`);
+    if (r.ok) {
+      const j = await r.json();
+      runs = j.workflow_runs.filter(w => ["in_progress", "queued", "waiting", "pending"].includes(w.status) && w.name !== "pages")
+        .map(w => ({ id: String(w.id), title: w.display_title, workflow: w.name, status: w.status, created: w.run_started_at || w.created_at, url: w.html_url, jobs: null }));
+      for (const w of runs.slice(0, 5)) {
+        try {
+          const jr = await fetch(`https://api.github.com/repos/${REPO}/actions/runs/${w.id}/jobs?per_page=60`);
+          if (jr.ok) w.jobs = (await jr.json()).jobs.map(x => ({ name: x.name, status: x.status, conclusion: x.conclusion }));
+        } catch (e) {}
+      }
+      $("#live-sub").textContent = "live from the GitHub API";
+    }
+  } catch (e) {}
+  if (!runs) { runs = D.live; $("#live-sub").textContent = "as of the last site build, " + ago(D.generated); }
+  if (!runs.length) { $("#live-list").innerHTML = `<div class="empty">Nothing running right now.</div>`; return; }
+  $("#live-list").innerHTML = runs.map(w => {
+    const js = (w.jobs || []).filter(j => !/^(plan|summary)$/.test(j.name));
+    const done = js.filter(j => j.status === "completed").length;
+    const boxes = js.map(j => `<span class="job ${j.status === "completed" ? (j.conclusion || "") : j.status}" title="${j.name.replace(/"/g, "&quot;")}"></span>`).join("");
+    return `<div class="live-run"><div class="t"><a href="${w.url}">${w.title}</a></div>
+      <div class="muted" style="font-size:12px">${w.workflow} · started ${ago(w.created)}${js.length ? ` · ${done}/${js.length} jobs done` : ""}</div>
+      ${js.length ? `<div class="jobs">${boxes}</div>` : ""}</div>`;
+  }).join("");
+}
+
+// ---------------- screens / sweeps ----------------
+function sweepView(kind, tabsId, chartId, tableId) {
+  const list = D.sweeps.filter(s => s.kind === kind && s.rows.length > 1);
+  if (!list.length) { $("#" + tabsId).innerHTML = `<span class="muted">no results yet</span>`; return; }
+  let cur = list[list.length - 1].id;
+  const draw = () => {
+    const s = list.find(x => x.id === cur);
+    $("#" + tabsId).innerHTML = list.map(x => `<button data-id="${x.id}" class="${x.id === cur ? "on" : ""}" title="${x.title}">${x.title.replace(/^(cmx screen|sweep) /, "")}</button>`).join("");
+    $("#" + tabsId).querySelectorAll("button").forEach(b => b.onclick = () => { cur = b.dataset.id; draw(); });
+    const rows = [...s.rows].sort((a, b) => a.bytes - b.bytes);
+    const P = palette();
+    const sh = document.getElementById(chartId + "-shared");
+    if (sh) sh.textContent = s.shared ? "every run: " + s.shared : "";
+    chart(chartId, {
+      type: "bar",
+      data: { labels: rows.map(r => `#${r.i} ${r.label}`.slice(0, 90)),
+        datasets: [{ data: rows.map(r => r.delta), backgroundColor: rows.map(r => r.delta < 0 ? P[2] : r.delta > 0 ? css("--err") : P[5]), borderRadius: 3 }] },
+      options: { indexAxis: "y", maintainAspectRatio: false, plugins: { legend: { display: false },
+        tooltip: { callbacks: { label: c => { const r = rows[c.dataIndex]; return `${r.delta >= 0 ? "+" : ""}${fmt(r.delta)} B (${r.pct >= 0 ? "+" : ""}${r.pct.toFixed(3)}%) · ${fmt(r.bytes)} B`; } } } },
+        scales: { x: { title: { display: true, text: "Δ bytes vs #0" } }, y: { grid: { display: false }, ticks: { font: { family: css("--mono"), size: 10.5 } } } } },
+    });
+    $("#" + tableId).innerHTML = `<table><thead><tr><th>#</th><th>config</th><th class="num">bytes</th><th class="num">Δ</th><th class="num">time</th><th class="num">RSS</th></tr></thead><tbody>` +
+      rows.map(r => `<tr><td>${r.i}</td><td class="cfg">${r.config}</td><td class="num">${fmt(r.bytes)}</td><td class="num ${r.delta < 0 ? "good" : r.delta > 0 ? "bad" : ""}">${r.delta >= 0 ? "+" : ""}${fmt(r.delta)}</td><td class="num">${r.secs ? (r.secs / 3600).toFixed(1) + " h" : "—"}</td><td class="num">${r.rss ? (r.rss / 1024).toFixed(1) + " GB" : "—"}</td></tr>`).join("") +
+      `</tbody></table><div class="muted" style="padding:8px 14px;font-size:12px"><a href="${s.url}">run ${s.id}</a></div>`;
+  };
+  draw();
+}
+function renderBest() {
+  const s30 = D.sweeps.filter(s => s.kind === "cmx" && s.mb === 30);
+  if (!s30.length) return;
+  let run = Infinity;
+  const pts = s30.map(s => { const m = Math.min(...s.rows.map(r => r.bytes)); run = Math.min(run, m); return { t: s.title.replace(/^cmx screen 30MB /, ""), m, run }; });
+  const P = palette();
+  chart("best-chart", {
+    type: "line",
+    data: { labels: pts.map(p => p.t), datasets: [
+      { label: "best in batch", data: pts.map(p => p.m), borderColor: P[1], backgroundColor: P[1], pointRadius: 3, tension: 0 },
+      { label: "best so far", data: pts.map(p => p.run), borderColor: P[2], backgroundColor: P[2], stepped: true, pointRadius: 0 },
+      { label: "cmix-neif 2.0", data: pts.map(() => 4940203), borderColor: P[5], borderDash: [5, 4], pointRadius: 0 },
+    ] },
+    options: { maintainAspectRatio: false, plugins: { tooltip: { callbacks: { label: c => c.dataset.label + ": " + fmt(c.raw) } } },
+      scales: { y: { ticks: { callback: v => fmt(v) } }, x: { grid: { display: false } } } },
+  });
+}
+
+// ---------------- stream ----------------
+function renderStream() {
+  const P = palette();
+  if (D.stream_rate.length) chart("stream-chart", {
+    type: "line",
+    data: { datasets: [{ data: D.stream_rate.map(([x, y]) => ({ x, y })), borderColor: P[0], borderWidth: 1.2, pointRadius: 0, fill: false }] },
+    options: { maintainAspectRatio: false, parsing: false, plugins: { legend: { display: false } },
+      scales: { x: { type: "linear", title: { display: true, text: "MB of the coder stream" } }, y: { min: 0, title: { display: true, text: "bits / byte" } } } },
+  });
+  const withReg = D.runs.filter(r => r.regions).sort((a, b) => b.in - a.in || a.out - b.out)[0];
+  if (withReg) {
+    const names = Object.keys(withReg.regions);
+    chart("region-chart", {
+      type: "bar",
+      data: { labels: names, datasets: [
+        { label: "input MB", data: names.map(n => withReg.regions[n][0] / 1e6), backgroundColor: P[5] + "99", borderRadius: 3 },
+        { label: "output MB", data: names.map(n => withReg.regions[n][1] / 1e6), backgroundColor: P[0], borderRadius: 3 },
+      ] },
+      options: { maintainAspectRatio: false, plugins: { tooltip: { callbacks: { afterBody: it => { const n = names[it[0].dataIndex]; const [i, o] = withReg.regions[n]; return (o * 8 / i).toFixed(3) + " bits per input byte"; } } } },
+        scales: { x: { grid: { display: false } }, y: { title: { display: true, text: `MB · ${withReg.file} ${withReg.note}` } } } },
+    });
+  }
+}
+
+// ---------------- math ----------------
+const HELPERS = {
+  sq: x => 1 / (1 + Math.exp(-x)), st: p => Math.log(p / (1 - p)),
+  log2: Math.log2, ln: Math.log, log: Math.log, exp: Math.exp, sqrt: Math.sqrt, pow: Math.pow, abs: Math.abs,
+  min: Math.min, max: Math.max, floor: Math.floor, ceil: Math.ceil, round: Math.round, sin: Math.sin, cos: Math.cos,
+  tanh: Math.tanh, acos: Math.acos, clamp: (x, a, b) => Math.min(b, Math.max(a, x)),
+  H: q => (q <= 0 || q >= 1) ? 0 : -(q * Math.log2(q) + (1 - q) * Math.log2(1 - q)),
+  CE: (q, p) => -(q * Math.log2(p) + (1 - q) * Math.log2(1 - p)),
+  PI: Math.PI, E: Math.E,
+};
+function compile(expr, params) {
+  const names = ["x", ...params.map(p => p.name), ...Object.keys(HELPERS)];
+  const fn = new Function(...names, `"use strict"; return (${expr});`);
+  return (x, pv) => fn(x, ...pv, ...Object.values(HELPERS));
+}
+function drawPlot(cv, f, hoverX) {
+  const COLORS = palette();
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  if (cv.width !== W * dpr || cv.height !== H * dpr) { cv.width = W * dpr; cv.height = H * dpr; }
+  const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  const L = 48, R = 10, T = 10, B = 24, pw = W - L - R, ph = H - T - B;
+  const [x0, x1] = f.x, pv = f.params.map(p => +p.value);
+  const fns = f.exprs.map(e => { try { return compile(e, f.params); } catch (err) { return null; } });
+  const N = Math.max(200, Math.floor(pw));
+  const series = fns.map(fn => { if (!fn) return null; const ys = []; for (let i = 0; i <= N; i++) { let y; try { y = fn(x0 + (x1 - x0) * i / N, pv); } catch (e) { y = NaN; } ys.push(+y); } return ys; });
+  let [y0, y1] = f.y && f.y[0] !== f.y[1] ? f.y : (() => { const all = series.flat().filter(v => v != null && isFinite(v)); if (!all.length) return [0, 1]; let a = Math.min(...all), b = Math.max(...all); if (a === b) { a -= 1; b += 1; } const m = (b - a) * .06; return [a - m, b + m]; })();
+  const X = x => L + (x - x0) / (x1 - x0) * pw, Y = y => T + (1 - (y - y0) / (y1 - y0)) * ph;
+  const ticks = (a, b, n) => { const s = Math.pow(10, Math.floor(Math.log10((b - a) / n))); const m = [1, 2, 5, 10].find(k => (b - a) / (s * k) <= n) * s; const o = []; for (let v = Math.ceil(a / m) * m; v <= b + 1e-12; v += m) o.push(+v.toPrecision(12)); return o; };
+  const ff = v => Math.abs(v) >= 1e5 || (Math.abs(v) < 1e-3 && v !== 0) ? v.toExponential(1) : +v.toPrecision(4) + "";
+  g.font = "10.5px " + css("--mono"); g.fillStyle = css("--faint"); g.strokeStyle = css("--grid"); g.lineWidth = 1;
+  g.textAlign = "right"; g.textBaseline = "middle";
+  for (const v of ticks(y0, y1, 5)) { const y = Math.round(Y(v)) + .5; g.beginPath(); g.moveTo(L, y); g.lineTo(L + pw, y); g.stroke(); g.fillText(ff(v), L - 6, y); }
+  g.textAlign = "center"; g.textBaseline = "top";
+  for (const v of ticks(x0, x1, 7)) { const x = Math.round(X(v)) + .5; g.beginPath(); g.moveTo(x, T); g.lineTo(x, T + ph); g.stroke(); g.fillText(ff(v), x, T + ph + 6); }
+  g.save(); g.beginPath(); g.rect(L, T, pw, ph); g.clip();
+  series.forEach((ys, k) => {
+    if (!ys) return;
+    g.strokeStyle = COLORS[k % 6]; g.lineWidth = k === 0 ? 2.2 : 1.6; g.setLineDash(k >= 2 ? [5, 4] : []);
+    g.beginPath(); let pen = false;
+    ys.forEach((y, i) => { if (!isFinite(y)) { pen = false; return; } const px = X(x0 + (x1 - x0) * i / N), py = Y(y); if (!pen) { g.moveTo(px, py); pen = true; } else g.lineTo(px, py); });
+    g.stroke();
+  });
+  g.setLineDash([]);
+  let read = "";
+  if (hoverX != null && hoverX >= L && hoverX <= L + pw) {
+    const x = x0 + (hoverX - L) / pw * (x1 - x0);
+    g.strokeStyle = css("--border-2"); g.beginPath(); g.moveTo(hoverX, T); g.lineTo(hoverX, T + ph); g.stroke();
+    read = "x " + ff(x);
+    fns.forEach((fn, k) => { if (!fn) return; let y; try { y = fn(x, pv); } catch (e) { y = NaN; } if (isFinite(y)) { g.fillStyle = COLORS[k % 6]; g.beginPath(); g.arc(hoverX, Y(y), 3, 0, 7); g.fill(); read += `\n${k + 1}: ${ff(y)}`; } });
+  }
+  g.restore();
+  return read;
+}
+function renderMath() {
+  const grid = $("#math-grid"); grid.innerHTML = "";
+  const COLORS = palette();
+  for (const f of D.formulas) {
+    const el = document.createElement("div"); el.className = "card";
+    el.innerHTML = `<div class="card-h">${f.title} <span class="tag">${f.tag}</span></div>
+      <div class="card-b"><div class="f-tex"></div><div class="f-plot"><canvas></canvas><div class="f-read"></div></div>
+      <div class="legend">${f.exprs.map((e, k) => `<span><i style="background:${COLORS[k % 6]}"></i>${e}</span>`).join("")}</div>
+      <div class="params"></div></div>`;
+    grid.appendChild(el);
+    try { katex.render(f.tex, el.querySelector(".f-tex"), { displayMode: true, throwOnError: false }); } catch (e) { el.querySelector(".f-tex").textContent = f.tex; }
+    const cv = el.querySelector("canvas"), rd = el.querySelector(".f-read");
+    let hx = null;
+    const redraw = () => { rd.textContent = drawPlot(cv, f, hx); };
+    const pr = el.querySelector(".params");
+    for (const p of f.params) {
+      const lab = document.createElement("span"); lab.textContent = p.name;
+      const inp = document.createElement("input"); Object.assign(inp, { type: "range", min: p.min, max: p.max, step: p.step, value: p.value });
+      const val = document.createElement("span"); val.textContent = p.value;
+      inp.oninput = () => { p.value = +inp.value; val.textContent = inp.value; redraw(); };
+      pr.append(lab, inp, val);
+    }
+    cv.onmousemove = e => { hx = e.offsetX; redraw(); };
+    cv.onmouseleave = () => { hx = null; redraw(); };
+    new ResizeObserver(redraw).observe(cv);
+  }
+}
+
+// ---------------- boot ----------------
+function renderAll() {
+  renderOverview();
+  sweepView("cmx", "screen-tabs", "screen-chart", "screen-table");
+  renderBest();
+  sweepView("cm", "sweep-tabs", "sweep-chart", "sweep-table");
+  renderStream();
+  renderMath();
+}
+async function load() {
+  const r = await fetch("data.json?t=" + Date.now());
+  D = await r.json();
+  $("#stamp").textContent = "built " + ago(D.generated);
+  renderAll();
+  renderLive();
+}
+try { const t = localStorage.getItem("xzip-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+$("#theme").onclick = () => {
+  const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+  const next = cur === "light" ? "dark" : "light";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("xzip-theme", next); } catch (e) {}
+  if (D) renderAll();
+};
+window.addEventListener("load", () => {
+  load();
+  setInterval(renderLive, 10 * 60 * 1000);   // 6 API calls per refresh: stays under the 60/h unauthenticated limit
+  setInterval(async () => { const r = await fetch("data.json?t=" + Date.now()); if (r.ok) { D = await r.json(); $("#stamp").textContent = "built " + ago(D.generated); } }, 15 * 60 * 1000);
+});
+</script>
+</body>
+</html>
