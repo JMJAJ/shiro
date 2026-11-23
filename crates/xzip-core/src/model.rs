@@ -361,6 +361,8 @@ pub struct Tune {
     pub sf: u8,
     /// per-stream (1) instead of shared (0) indirect order-2 table
     pub ind2s: u8,
+    /// extra contexts: bit k enables context 24+k (see the context layout)
+    pub xc: u32,
 }
 
 impl Default for Tune {
@@ -386,6 +388,7 @@ impl Default for Tune {
             m7: 1,
             sf: 1,
             ind2s: 1,
+            xc: 0,
         }
     }
 }
@@ -417,6 +420,7 @@ impl Tune {
                 "m7" => t.m7 = f as u8,
                 "sf" => t.sf = f as u8,
                 "ind2s" => t.ind2s = f as u8,
+                "xc" => t.xc = f as u32,
                 _ => return Err(format!("unknown tune key {k}")),
             }
         }
@@ -441,8 +445,18 @@ impl Tune {
 ///   21         number: digit-run length + 2 bytes before the run + c1
 ///   22         sparse: bytes 1 and 3
 ///   23         markup segment: opener ([[ | = etc.) + distance bucket + word0
+/// Optional (Tune::xc bit k enables 24+k; off = no lookup, inputs stay 0):
+///   24         case-folded order 4
+///   25         word indirect: the word that followed word1 last time + word0
+///   26         first letters of the last three words + word0
+///   27         non-letter gap before the current word + word0
+///   28         word index in the sentence + word0 + c1
+///   29         order 24
+///   30         case-folded order 6
+///   31         table cell: line head byte + '|' count in the line + c1
 const ORDERS: [u32; 7] = [1, 2, 3, 4, 5, 6, 8];
-const N_CTX: usize = 24;
+const N_CTX: usize = 32;
+const N_BASE: usize = 24;
 /// per context: slot, indirect, run, confidence; + 2x2 match + bias
 const N_IN: usize = 4 * N_CTX + 4 + 1 + 2; // + side (neural) input, present flag
 
@@ -493,6 +507,11 @@ struct Hist {
     dpre: u64,
     seg: u64,
     seg_pos: usize,
+    lc8: u64,
+    gap: u64,
+    wpos: u64,
+    fl: u64,
+    pipes: u64,
 }
 
 impl Hist {
@@ -516,6 +535,11 @@ impl Hist {
             dpre: 0,
             seg: 0,
             seg_pos: 0,
+            lc8: 0,
+            gap: 0,
+            wpos: 0,
+            fl: 0,
+            pipes: 0,
         }
     }
 }
@@ -585,6 +609,14 @@ pub struct Model {
     a5ctx: usize,
     a3ctx: usize,
     bits_seen: u64,
+    act: [usize; N_CTX],
+    nact: usize,
+    lc8: u64,
+    gap: u64,
+    wpos: u64,
+    fl: u64,
+    pipes: u64,
+    wnext: Vec<u32>,
 }
 
 impl Model {
@@ -592,8 +624,16 @@ impl Model {
         let tune = cfg.tune.clone();
         let mut tables = Vec::with_capacity(N_CTX);
         let mut tbits = [0u32; N_CTX];
+        let mut act = [0usize; N_CTX];
+        let mut nact = 0;
         for (i, tb) in tbits.iter_mut().enumerate() {
+            let on = i < N_BASE || (cfg.tune.xc >> (i - N_BASE)) & 1 != 0;
+            if on {
+                act[nact] = i;
+                nact += 1;
+            }
             let b = match i {
+                _ if !on => 0,
                 0 => 10,
                 1 => 16.min(cfg.table_bits),
                 2 => 20.min(cfg.table_bits),
@@ -672,6 +712,14 @@ impl Model {
             a5ctx: 0,
             a3ctx: 0,
             bits_seen: 0,
+            act,
+            nact,
+            lc8: 0,
+            gap: 0,
+            wpos: 0,
+            fl: 0,
+            pipes: 0,
+            wnext: if cfg.tune.xc & 2 != 0 { vec![0; 1 << 22] } else { Vec::new() },
             tune,
         };
         m.byte_contexts();
@@ -731,6 +779,41 @@ impl Model {
         }
         self.ctx[17] = hash2(h12, 112);
         self.ctx[18] = hash2(h16, 113);
+        if self.tune.xc != 0 {
+            let xc = self.tune.xc;
+            let wk = self.word.wrapping_mul(0x9E6C_63D0_676A_9A99);
+            if xc & 1 != 0 {
+                self.ctx[24] = hash2(self.lc8 & 0xffff_ffff, 120);
+            }
+            if xc & 2 != 0 {
+                let nw = self.wnext[(self.prevword >> 42) as usize] as u64;
+                let between = if self.word == 0 { self.c8 & 0xff } else { 0 };
+                self.ctx[25] = hash2((nw << 8) ^ wk ^ between, 121);
+            }
+            if xc & 4 != 0 {
+                self.ctx[26] = hash2((self.fl & 0xff_ffff) ^ wk, 122);
+            }
+            if xc & 8 != 0 {
+                self.ctx[27] = hash2(self.gap ^ wk, 123);
+            }
+            if xc & 16 != 0 {
+                self.ctx[28] = hash2((self.wpos.min(15) << 56) ^ wk ^ (self.c8 & 0xff), 124);
+            }
+            if xc & 32 != 0 {
+                let mut h24 = h16;
+                for &c in &self.lb[n.saturating_sub(24)..n.saturating_sub(16)] {
+                    h24 = h24.wrapping_mul(0x100_0000_01B3).wrapping_add(c as u64 + 13);
+                }
+                self.ctx[29] = hash2(h24, 125);
+            }
+            if xc & 64 != 0 {
+                self.ctx[30] = hash2(self.lc8 & 0xffff_ffff_ffff, 126);
+            }
+            if xc & 128 != 0 {
+                let h1 = if col >= 1 { self.lb[self.line_start] as u64 } else { 0 };
+                self.ctx[31] = hash2((h1 << 16) | (self.pipes.min(15) << 8) | (self.c8 & 0xff), 127);
+            }
+        }
         let iv = self.ind2[(self.c8 & 0xffff) as usize] as u64;
         self.ctx[19] = hash2((iv << 8) | (self.c8 & 0xff), 114);
         self.ctx[20] = hash2(self.tag ^ ((self.c8 & 0xff_ffff) << 1) ^ (self.in_tag as u64), 115);
@@ -752,7 +835,8 @@ impl Model {
     fn nibble_lookup(&mut self, first: bool) {
         let salt = if first { 0 } else { self.c0 as u64 + 0x100 };
         let mut hits = 0;
-        for i in 0..N_CTX {
+        let act = self.act;
+        for &i in &act[..self.nact] {
             let h = if first { self.ctx[i] } else { hash2(self.ctx[i], salt) };
             let b = self.tbits[i];
             let (ix, new) = lookup(&mut self.tables[i], b, h);
@@ -814,6 +898,11 @@ impl Model {
         std::mem::swap(&mut self.dpre, &mut h.dpre);
         std::mem::swap(&mut self.seg, &mut h.seg);
         std::mem::swap(&mut self.seg_pos, &mut h.seg_pos);
+        std::mem::swap(&mut self.lc8, &mut h.lc8);
+        std::mem::swap(&mut self.gap, &mut h.gap);
+        std::mem::swap(&mut self.wpos, &mut h.wpos);
+        std::mem::swap(&mut self.fl, &mut h.fl);
+        std::mem::swap(&mut self.pipes, &mut h.pipes);
         self.saved[self.cur_stream] = Some(h);
         let mut h = self.saved[k].take().unwrap_or_else(Hist::new);
         std::mem::swap(&mut self.lb, &mut h.lb);
@@ -833,6 +922,11 @@ impl Model {
         std::mem::swap(&mut self.dpre, &mut h.dpre);
         std::mem::swap(&mut self.seg, &mut h.seg);
         std::mem::swap(&mut self.seg_pos, &mut h.seg_pos);
+        std::mem::swap(&mut self.lc8, &mut h.lc8);
+        std::mem::swap(&mut self.gap, &mut h.gap);
+        std::mem::swap(&mut self.wpos, &mut h.wpos);
+        std::mem::swap(&mut self.fl, &mut h.fl);
+        std::mem::swap(&mut self.pipes, &mut h.pipes);
         if self.tune.ind2s != 0 {
             // per-stream indirect table: park ours in the outgoing stream, take k's
             // (`h` now holds stream k's parked history; the outgoing one is in saved)
@@ -869,7 +963,8 @@ impl Model {
             (1usize << k) | (self.c0 as usize & ((1 << k) - 1))
         };
         let sn = self.node - 1;
-        for i in 0..N_CTX {
+        let act = self.act;
+        for &i in &act[..self.nact] {
             let s = self.tables[i][self.cur[i]].s[sn];
             self.x[i] = self.t.st16(s.p);
             let nb = if self.tune.ih != 0 { [0usize, 1, 1, 2, 2, 2, 2, 2][(s.n as usize).min(7)] + (s.n >= 30) as usize } else { 0 };
@@ -956,7 +1051,8 @@ impl Model {
         self.side = 0;
         let sn = self.node - 1;
         let (lim_lo, lim_hi) = (self.tune.limit_lo, self.tune.limit_hi);
-        for i in 0..N_CTX {
+        let act = self.act;
+        for &i in &act[..self.nact] {
             let limit = if i <= 2 { lim_lo } else { lim_hi };
             let ix = self.cur[i];
             slot_update(&mut self.tables[i][ix].s[sn], bit, &self.t, limit);
@@ -1007,7 +1103,8 @@ impl Model {
     }
 
     fn end_byte(&mut self, b: u8) {
-        for i in 0..N_CTX {
+        let act = self.act;
+        for &i in &act[..self.nact] {
             let bk = &mut self.tables[i][self.b0[i]];
             if bk.chk != self.b0chk[i] {
                 continue;
@@ -1079,6 +1176,29 @@ impl Model {
             _ => {}
         }
         let is_letter = b.is_ascii_alphabetic() || b >= 128;
+        let lb8 = b.to_ascii_lowercase();
+        self.lc8 = (self.lc8 << 8) | lb8 as u64;
+        if self.tune.xc != 0 {
+            if is_letter && self.word == 0 {
+                self.fl = (self.fl << 8) | lb8 as u64;
+            }
+            if !is_letter {
+                self.gap = if self.word != 0 { hash2(0, b as u64) } else { hash2(self.gap, b as u64) };
+            }
+            match b {
+                b'.' | b'!' | b'?' | b'\n' => self.wpos = 0,
+                _ if is_letter && self.word == 0 => self.wpos += 1,
+                _ => {}
+            }
+            if b == b'\n' {
+                self.pipes = 0;
+            } else if b == b'|' {
+                self.pipes += 1;
+            }
+            if !is_letter && self.word != 0 && !self.wnext.is_empty() {
+                self.wnext[(self.prevword >> 42) as usize] = self.word as u32;
+            }
+        }
         if is_letter {
             self.word = hash2(self.word, b.to_ascii_lowercase() as u64 + 1);
             self.wlen += 1;
