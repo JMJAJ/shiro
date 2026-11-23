@@ -1201,6 +1201,9 @@ bool RunCompression(bool enable_preprocess, const std::string& input_path,
   if (!MetablockInert()) dict_article::Pruefen();
   fclose(temp_in);
   fclose(data_out);
+#if PORT_CMX_MEAS && !PORT_ENTRY
+  if (!getenv("XZ_KEEP_TEMP"))  // xzip research: keep the coder stream for -n screens
+#endif
   remove(temp_path.c_str());
   return true;
 }
