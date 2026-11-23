@@ -1,0 +1,160 @@
+# A/B sweep: each line of `runs` is "<git ref> [XZIP_TUNE spec]" and gets its own
+# runner (up to 20 in parallel, free on a public repo). The first line is the
+# baseline; the summary table gives every run's delta against it.
+#   gh workflow run sweep.yml -f file=enwik7 -f runs=$'main\nmy-branch\nmain lr_hi=0.02'
+# or tools/gha.sh, which dispatches, waits and prints the table.
+name: sweep
+
+on:
+  workflow_dispatch:
+    inputs:
+      file:
+        description: "enwik6 | enwik7 | enwik8 | e30m (first 30 MB of enwik8)"
+        default: enwik7
+      bits:
+        description: "table bits"
+        default: "22"
+      runs:
+        description: "runs separated by newlines or ;  each <ref> [tune spec]; first = baseline"
+        default: main
+      order:
+        description: "empty = file order, or B,T for the decodable stream order"
+        default: ""
+      label:
+        description: "free text shown in the summary"
+        default: ""
+
+run-name: "sweep ${{ inputs.file }} ${{ inputs.label }}"
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - name: Parse runs
+        id: m
+        env:
+          RUNS: ${{ inputs.runs }}
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
+          import json, os
+          rows = []
+          for i, line in enumerate(l.strip() for l in os.environ["RUNS"].replace("\\n", "\n").splitlines()):
+              if not line:
+                  continue
+              ref, _, tune = line.partition(" ")
+              rows.append({"i": len(rows), "ref": ref, "tune": tune.strip()})
+          assert 1 <= len(rows) <= 40, "1..40 runs"
+          print("matrix=" + json.dumps({"include": rows}))
+          EOF
+      - name: Cache enwik8
+        id: data
+        uses: actions/cache@v4
+        with:
+          path: data/enwik8
+          key: enwik8-v1
+      - name: Download enwik8
+        if: steps.data.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p data
+          curl -sSfL -o /tmp/enwik8.zip http://mattmahoney.net/dc/enwik8.zip
+          unzip -q /tmp/enwik8.zip -d data
+          test "$(stat -c %s data/enwik8)" = 100000000
+
+  eval:
+    needs: plan
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    name: "${{ matrix.i }} ${{ matrix.ref }} ${{ matrix.tune }}"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: w
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+          path: x
+      - uses: actions/cache/restore@v4
+        with:
+          path: data/enwik8
+          key: enwik8-v1
+          fail-on-cache-miss: true
+      - name: Input
+        run: |
+          case "${{ inputs.file }}" in
+            enwik8) ln -s enwik8 data/in ;;
+            enwik7) head -c 10000000 data/enwik8 > data/in ;;
+            enwik6) head -c 1000000 data/enwik8 > data/in ;;
+            e30m)   head -c 30000000 data/enwik8 > data/in ;;
+            *) echo "unknown file"; exit 1 ;;
+          esac
+          extra=""
+          if [ -n "${{ inputs.order }}" ]; then
+            IFS=, read B T <<< "${{ inputs.order }}"
+            pip install --quiet numpy
+            python3 w/tools/schedule.py data/in /tmp/in.order --B "$B" --T "$T"
+            extra="--order /tmp/in.order --streams $B"
+          fi
+          echo "EXTRA=$extra" >> "$GITHUB_ENV"
+      - name: Build
+        working-directory: x
+        run: cargo build --release 2>&1 | tail -3
+      - name: Eval
+        env:
+          XZIP_TUNE: ${{ matrix.tune }}
+        run: |
+          mkdir -p out
+          ./x/target/release/xzip eval data/in --bits ${{ inputs.bits }} $EXTRA \
+            --log out/run.jsonl --rev "$(git -C x rev-parse --short HEAD)" \
+            --note "${{ matrix.ref }}" 2>/dev/null | tee out/result.txt
+          python3 - <<'EOF'
+          import json
+          r = json.loads(open("out/run.jsonl").read())
+          r.update(i=${{ matrix.i }}, ref="${{ matrix.ref }}", tune="""${{ matrix.tune }}""",
+                   file="${{ inputs.file }}", order="${{ inputs.order }}", cpu=open("/proc/cpuinfo").read().split("model name")[1].split(":")[1].split("\n")[0].strip())
+          open("out/run.jsonl", "w").write(json.dumps(r) + "\n")
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: run-${{ matrix.i }}
+          path: out/
+          retention-days: 30
+
+  summary:
+    needs: eval
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: run-*
+          path: runs
+      - name: Table
+        run: |
+          cat runs/*/run.jsonl > all.jsonl || true
+          python3 - <<'EOF' | tee -a "$GITHUB_STEP_SUMMARY" > table.md
+          import json
+          rs = sorted((json.loads(l) for l in open("all.jsonl") if l.strip()), key=lambda r: r["i"])
+          if not rs:
+              print("no results"); raise SystemExit
+          base = rs[0]["out"] if rs[0]["i"] == 0 else None
+          print(f"### ${{ inputs.file }} bits=${{ inputs.bits }} order=`${{ inputs.order }}` ${{ inputs.label }}\n")
+          print("| # | ref | tune | bytes | vs #0 | bpc | text | link | µs/B | rev |")
+          print("|---|---|---|---|---|---|---|---|---|---|")
+          for r in sorted(rs, key=lambda r: r["out"]):
+              d = f"{(r['out'] - base) * 100 / base:+.3f}%" if base else ""
+              g = r["regions"]
+              bp = lambda k: f"{g[k][1] * 8 / max(1, g[k][0]):.4f}"
+              print(f"| {r['i']} | {r['ref']} | `{r['tune']}` | {r['out']:,} | {d} | {r['bpc']:.5f} | {bp('text')} | {bp('link')} | {r['secs'] * 1e6 / r['in']:.1f} | {r['rev']} |")
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: summary
+          path: |
+            all.jsonl
+            table.md
