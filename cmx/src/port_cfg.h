@@ -66,6 +66,7 @@
 //                  For byte-equality certification against the research build; never the form that ships.
 #ifndef PORT_CFG_H_
 #define PORT_CFG_H_
+#include "xz_build.h"   // xzip: build-time research overrides (empty = this tree as released)
 
 #ifndef PORT_CMX_MEAS
 #define PORT_CMX_MEAS 0   /* 1: CMX_LOG_EVERY / CMX_BYTECOST / CMX_STOP_AT / CMX_TFOFF / CMX_SEMCACHE_OFF (-e only) */

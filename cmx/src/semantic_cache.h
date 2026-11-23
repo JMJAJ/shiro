@@ -47,6 +47,8 @@
 // about 2.2 GB (key ring 1 GiB, bucket table 960 MiB, positions, bytes and
 // history 112 MiB).
 
+#include "xz_build.h"
+
 namespace semantic_cache {
 
 // geometry (index and key ring of about 2.2 GB)
@@ -54,55 +56,105 @@ namespace semantic_cache {
 // kWhLog 26, kPre 512, kDedupLog 10 (the research build resm_b25rp512 set the same six through the SEMCONST hook of
 // its build script).  The release lines keep their form, so that hook still works on a PORT_ENTRY 0 tree.
 constexpr int kD = 128;                // key dimensions
-constexpr int kL = 16;                 // SimHash tables
-constexpr int kB = 18;                 // bits per table
-#if PORT_ENTRY
+#if defined(XZ_SEM_L)
+constexpr int kL = XZ_SEM_L;   // xzip build override (src/xz_build.h)
+#else
+constexpr int kL = 16;
+#endif                 // SimHash tables
+#if defined(XZ_SEM_B)
+constexpr int kB = XZ_SEM_B;   // xzip build override (src/xz_build.h)
+#else
+constexpr int kB = 18;
+#endif                 // bits per table
+#if defined(XZ_SEM_M)
+constexpr int kM = XZ_SEM_M;   // xzip build override (src/xz_build.h)
+#elif PORT_ENTRY
 constexpr int kM{63};   // entry recipe A (release 15)
 #else
 constexpr int kM = 15;                 // newest entries kept per bucket
 #endif
-#if PORT_ENTRY
+#if defined(XZ_SEM_FLIP)
+constexpr int kFlip = XZ_SEM_FLIP;   // xzip build override (src/xz_build.h)
+#elif PORT_ENTRY
 constexpr int kFlip{15};   // entry recipe A (release 3)
 #else
 constexpr int kFlip = 3;               // extra buckets per table
 #endif
 constexpr int kProbe = kFlip + 1;      // buckets read per table
-#if PORT_ENTRY
+#if defined(XZ_SEM_NLOG)
+constexpr int kNLog = XZ_SEM_NLOG;   // xzip build override (src/xz_build.h)
+#elif PORT_ENTRY
 constexpr int kNLog{25};   // entry recipe A (release 24)
 #else
 constexpr int kNLog = 24;              // key ring of 2^kNLog entries
 #endif
 constexpr uint32_t kN = 1u << kNLog;
-constexpr int kK = 32;                 // neighbours of a lookup
+#if defined(XZ_SEM_K)
+constexpr int kK = XZ_SEM_K;   // xzip build override (src/xz_build.h)
+#else
+constexpr int kK = 32;
+#endif                 // neighbours of a lookup
 constexpr int kSk = 96;                // sketch bits held in a slot
 constexpr int kSkGen = 128;            // sketch hyperplanes drawn (generator order)
 constexpr int kKB = kD / 2;            // key bytes per ring entry (int4 pairs)
 constexpr int kPf = 8;                 // buckets prefetched ahead of the scan
-constexpr int kTE3 = 20;               // temperature on the cosine x 1000
+#if defined(XZ_SEM_TE3)
+constexpr int kTE3 = XZ_SEM_TE3;   // xzip build override (src/xz_build.h)
+#else
+constexpr int kTE3 = 20;
+#endif               // temperature on the cosine x 1000
 // thresholds on p(transformer top-1), x 1000
-constexpr int kQpE3 = 990;             // look up below
-constexpr int kSpE3 = 950;             // store below
+#if defined(XZ_SEM_QPE3)
+constexpr int kQpE3 = XZ_SEM_QPE3;   // xzip build override (src/xz_build.h)
+#else
+constexpr int kQpE3 = 990;
+#endif             // look up below
+#if defined(XZ_SEM_SPE3)
+constexpr int kSpE3 = XZ_SEM_SPE3;   // xzip build override (src/xz_build.h)
+#else
+constexpr int kSpE3 = 950;
+#endif             // store below
 constexpr int kGqE3 = 900;             // a lookup below starts a follower generation
 constexpr int kC1E3 = 833;             // similarity classes: s_max < C1, < C2, >= C2
 constexpr int kC2E3 = 927;
 // content
 constexpr uint32_t kCen = 1048576;     // lookups of the running key mean
-constexpr int kGap = 1024;             // neighbours lie at least kGap stream bytes back
-constexpr int kG = 4;                  // follower generations
-constexpr int kWtMax = 24;             // bytes a neighbour is followed
-#if PORT_ENTRY
+#if defined(XZ_SEM_GAP)
+constexpr int kGap = XZ_SEM_GAP;   // xzip build override (src/xz_build.h)
+#else
+constexpr int kGap = 1024;
+#endif             // neighbours lie at least kGap stream bytes back
+#if defined(XZ_SEM_G)
+constexpr int kG = XZ_SEM_G;   // xzip build override (src/xz_build.h)
+#else
+constexpr int kG = 4;
+#endif                  // follower generations
+#if defined(XZ_SEM_WTMAX)
+constexpr int kWtMax = XZ_SEM_WTMAX;   // xzip build override (src/xz_build.h)
+#else
+constexpr int kWtMax = 24;
+#endif             // bytes a neighbour is followed
+#if defined(XZ_SEM_WHLOG)
+constexpr int kWhLog = XZ_SEM_WHLOG;   // xzip build override (src/xz_build.h)
+#elif PORT_ENTRY
 constexpr int kWhLog{26};   // entry recipe A (release 25)
 #else
 constexpr int kWhLog = 25;             // stream history ring of 2^kWhLog bytes
 #endif
 constexpr uint64_t kHist = (uint64_t)1 << kWhLog;
 // re-ranking depth, end-stage learning rate and key mean
-#if PORT_ENTRY
+#if defined(XZ_SEM_PRE)
+constexpr int kPre = XZ_SEM_PRE;   // xzip build override (src/xz_build.h)
+#elif PORT_ENTRY
 constexpr int kPre{512};   // entry recipe A (release 128)
 #else
 constexpr int kPre = 128;              // candidates re-ranked by the cosine
 #endif
-constexpr int kLrE6 = 20000;           // AdaGrad base rate of the end stage in 1e-6
+#if defined(XZ_SEM_LRE6)
+constexpr int kLrE6 = XZ_SEM_LRE6;   // xzip build override (src/xz_build.h)
+#else
+constexpr int kLrE6 = 20000;
+#endif           // AdaGrad base rate of the end stage in 1e-6
 constexpr int kCalqE3 = 900;           // the running key mean counts lookups below this only
 // end stage
 constexpr int kUIn = 20;               // inputs of a stage
@@ -112,7 +164,9 @@ constexpr int kUC6 = 8 * 4 * 2 * 64;     // bit x similarity x agreement x previ
 constexpr uint32_t kUAge = 65536;        // near / far neighbours
 constexpr int kSureE3 = 990;             // a bit with P >= this / 1000 for one value skips the end stage
 constexpr int kCandMax = kL * kProbe * kM;
-#if PORT_ENTRY
+#if defined(XZ_SEM_DEDUPLOG)
+constexpr int kDedupLog = XZ_SEM_DEDUPLOG;   // xzip build override (src/xz_build.h)
+#elif PORT_ENTRY
 constexpr int kDedupLog{10};   // entry recipe A (release 9)
 #else
 constexpr int kDedupLog = 9;           // set of the kPre selected candidates
