@@ -85,6 +85,24 @@ struct Bucket {
 
 const BUCKET0: Bucket = Bucket { chk: 0, last: 0, run: 0, s: [SLOT0; 15] };
 
+/// Hint the cache lines `lookup` will probe for hash `h` (no effect on results).
+#[inline]
+fn prefetch(tab: &[Bucket], bits: u32, h: u64) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
+        let mask = tab.len() - 1;
+        let base = (h >> (64 - bits)) as usize;
+        for k in 0..3usize {
+            let ix = (base ^ k) & mask;
+            // SAFETY: ix <= mask < tab.len(); prefetch never faults
+            unsafe { _mm_prefetch(tab.as_ptr().add(ix) as *const i8, _MM_HINT_T0) };
+        }
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    let _ = (tab, bits, h);
+}
+
 /// Find or allocate the bucket for hash `h`. Returns (index, newly_allocated).
 #[inline]
 fn lookup(tab: &mut [Bucket], bits: u32, h: u64) -> (usize, bool) {
@@ -752,8 +770,13 @@ impl Model {
     fn nibble_lookup(&mut self, first: bool) {
         let salt = if first { 0 } else { self.c0 as u64 + 0x100 };
         let mut hits = 0;
+        let mut hs = [0u64; N_CTX];
         for i in 0..N_CTX {
-            let h = if first { self.ctx[i] } else { hash2(self.ctx[i], salt) };
+            hs[i] = if first { self.ctx[i] } else { hash2(self.ctx[i], salt) };
+            prefetch(&self.tables[i], self.tbits[i], hs[i]);
+        }
+        for i in 0..N_CTX {
+            let h = hs[i];
             let b = self.tbits[i];
             let (ix, new) = lookup(&mut self.tables[i], b, h);
             if new && (2..=7).contains(&i) {
