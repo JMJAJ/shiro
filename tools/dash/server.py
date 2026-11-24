@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""xzip lab: a local dashboard for runs, live jobs on the test box, and a formula lab.
+"""shiro lab: a local dashboard for runs, live jobs on the test box, and a formula lab.
 
-    XZIP_PASS=... python tools/dash/server.py          # http://127.0.0.1:8765
+    SHIRO_PASS=... python tools/dash/server.py          # http://127.0.0.1:8765
     python tools/dash/server.py --port 9000 --no-remote
 
-Env: XZIP_HOST / XZIP_USER / XZIP_PASS (as tools/remote.py; the password is only held
-in memory), XZIP_DIRS = remote checkouts to read (default "xzip,xzip-dev,xzip-dev2").
+Env: SHIRO_HOST / SHIRO_USER / SHIRO_PASS (as tools/remote.py; the password is only held
+in memory), SHIRO_DIRS = remote checkouts to read (default "xzip,xzip-dev,xzip-dev2").
 Binds to 127.0.0.1 only. Formulas and journal notes are saved in tools/dash/lab.json.
 """
 import argparse
@@ -24,17 +24,17 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 LAB_FILE = os.path.join(HERE, "lab.json")
 LOCAL_RUNS = os.path.join(ROOT, "results", "runs.jsonl")
-DIRS = [d for d in os.environ.get("XZIP_DIRS", "xzip,xzip-dev,xzip-dev2").split(",") if d]
+DIRS = [d for d in os.environ.get("SHIRO_DIRS", "xzip,xzip-dev,xzip-dev2").split(",") if d]
 
 
 # ---------------- remote (SSH) ----------------
 
 class Remote:
     def __init__(self, enabled):
-        self.enabled = enabled and bool(os.environ.get("XZIP_PASS") or os.environ.get("XZIP_KEYS"))
+        self.enabled = enabled and bool(os.environ.get("SHIRO_PASS") or os.environ.get("SHIRO_KEYS"))
         self.lock = threading.Lock()
         self.client = None
-        self.error = None if self.enabled else "remote disabled (set XZIP_PASS)"
+        self.error = None if self.enabled else "remote disabled (set SHIRO_PASS)"
 
     def _conn(self):
         if self.client is not None:
@@ -307,7 +307,7 @@ def main():
     a = ap.parse_args()
     REMOTE = Remote(not a.no_remote)
     srv = ThreadingHTTPServer(("127.0.0.1", a.port), H)
-    print(f"xzip lab on http://127.0.0.1:{a.port}  (remote: {'on' if REMOTE.enabled else 'off'})", flush=True)
+    print(f"shiro lab on http://127.0.0.1:{a.port}  (remote: {'on' if REMOTE.enabled else 'off'})", flush=True)
     srv.serve_forever()
 
 

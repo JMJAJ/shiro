@@ -4,7 +4,7 @@
 # Each run is logged to results/runs.jsonl (kind "nn", note "nnsweep <args>").
 set -u
 file=$1; shift
-py=${XZIP_PY:-$HOME/xzip-venv/bin/python}
+py=${SHIRO_PY:-$HOME/xzip-venv/bin/python}
 while ps aux | grep -q '[n]n/online.py'; do sleep 10; done
 for a in "$@"; do
   # shellcheck disable=SC2086

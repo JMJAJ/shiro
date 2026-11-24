@@ -1,4 +1,4 @@
-# xzip research program
+# shiro research program
 
 This document carries out the long research brief in **stages**. Each stage is real work: code read, numbers measured, math written down. Nothing here is a one-line survey. The [research index](#research-index) tracks what is done and what is still open.
 
@@ -16,7 +16,7 @@ Citations are given from primary sources, by author, year and venue. Links have 
 
 | Stage | Content | Status |
 |---|---|---|
-| **1** | F: technical audit of the repo · Part 8: limits that bound what xzip can win · H: research proposals · I: immediate action plan · core bibliography | **this document** |
+| **1** | F: technical audit of the repo · Part 8: limits that bound what shiro can win · H: research proposals · I: immediate action plan · core bibliography | **this document** |
 | 2 | B: historical timeline · C: algorithm comparison (LZ family, BWT, PPM, CM, ANS) with costs · D: mathematical reference (deriving every formula used in `model.rs` and `online.py`) | open |
 | 3 | E: neural compression review (NNCP, cmix's LSTM, LLM-as-compressor, learned image codecs and which of their ideas transfer to text) | open |
 | 4 | Parts 6, 9 and 10: ideas from outside compression; a deterministic-inference engineering study; a benchmark suite beyond enwik | open |
@@ -40,7 +40,7 @@ flowchart LR
     M --> G[trie marginaliser: P token to P byte to 8 bit probabilities]
   end
   G -- "side file: 8 x u16 per byte" --> X
-  subgraph CM["crates/xzip-core (CPU, Rust)"]
+  subgraph CM["crates/shiro-core (CPU, Rust)"]
     X[24 hashed contexts + 2 match models] --> I[per-context inputs: slot, bit-history, run, confidence]
     I --> MX[8 context-selected mixers] --> F2[final mixer, selected by c0] --> A[5 APMs + learned blend]
   end
@@ -83,13 +83,13 @@ flowchart LR
 1. **Tokens.** Text becomes word or byte tokens, about 1.90 bytes per token on enwik8.
 2. **Streams.** The tokens are split into B contiguous streams. Each step predicts T new tokens per stream with T tokens of left context, then takes one AdamW step (or `--inner k` steps) on that same batch.
 3. **Bit predictions.** Token probabilities become per-bit probabilities through a vocabulary trie. Inside a word, every byte uses the distribution of the word's **first** token, and a lookahead head predicts the delimiter.
-4. **Side file.** The result is written as a side file. `xzip eval --side` reads it.
+4. **Side file.** The result is written as a side file. `shiro eval --side` reads it.
 
 ### F.2 Confirmed findings (from the source and from measurement)
 
 | # | Finding | Severity | Evidence |
 |---|---|---|---|
-| **A1** | **The hybrid numbers are not decodable as measured.** The NN trains B streams in lockstep, so its prediction at step s depends on training over *all* streams at steps < s. A decoder must therefore produce bytes in **block-interleaved** order: step s, then streams 0…B−1. `xzip eval --side` feeds the CM in *file* order, which a decoder cannot reproduce: stream 0 would need NN steps whose training depends on stream 1, which isn't decoded yet. In the decodable order the CM's order-n contexts break at every block boundary (~486 bytes). | **critical** for every hybrid claim | Code: `online.py` stream layout vs `lib.rs::eval`. Measurement: `eval --order` + `tools/schedule.py`. **enwik8, B = 24, T = 256 (205,776 blocks, mean 486 B): CM 17,780,730 → 19,421,393 (+9.2%); hybrid 16,637,907 → 17,598,163 (+5.8%).** The fix is P1. |
+| **A1** | **The hybrid numbers are not decodable as measured.** The NN trains B streams in lockstep, so its prediction at step s depends on training over *all* streams at steps < s. A decoder must therefore produce bytes in **block-interleaved** order: step s, then streams 0…B−1. `shiro eval --side` feeds the CM in *file* order, which a decoder cannot reproduce: stream 0 would need NN steps whose training depends on stream 1, which isn't decoded yet. In the decodable order the CM's order-n contexts break at every block boundary (~486 bytes). | **critical** for every hybrid claim | Code: `online.py` stream layout vs `lib.rs::eval`. Measurement: `eval --order` + `tools/schedule.py`. **enwik8, B = 24, T = 256 (205,776 blocks, mean 486 B): CM 17,780,730 → 19,421,393 (+9.2%); hybrid 16,637,907 → 17,598,163 (+5.8%).** The fix is P1. |
 | **A2** | **GPU training is not reproducible.** Measured: two identical enwik7 runs gave NN-only 2,523,937 vs 2,530,883 (0.27% apart). Training runs under bf16 autocast with cuBLAS reductions in nondeterministic order. There's no `torch.use_deterministic_algorithms`, and no fixed kernel set. A decoder on another GPU, driver or PyTorch version, or even a rerun, would compute different probabilities, and the arithmetic decoder would desynchronize after the first differing bit. | **critical** for an archive | Code: `online.py` training loop. |
 | **A3** | **The vocabulary is not paid for.** `Vocab.build` scans the whole file before coding. A decoder needs the 16,384-word list, and that cost is missing from every NN and hybrid number. Fix it either by coding the vocabulary as a header (estimated at roughly 0.05–0.1 MB with xz) or by building the vocabulary online. | moderate (~0.3–0.6% on enwik8, less on enwik9) | Code: `online.py` main, `tokenizer.py::Vocab.build`. |
 | **A4** | **5.3% of bytes get no NN prediction.** 94,744,874 of 100M bytes have a record. The rest are the inside letters of out-of-vocabulary words and the delimiter after them. Once a prefix leaves the trie, the decoder *knows* those letters are byte tokens, so the NN's prediction at that token position is valid and causal. It just isn't used yet. These are the rare-word bytes, among the most expensive in the file. | moderate, cheap to fix | Log: `records 94744874/100000000`. Code: `tokenizer.py` (`if node < 0: break`). |
@@ -138,7 +138,7 @@ The file-order references are 17,780,730 (CM) and 16,637,907 (hybrid).
 - **[E] Deterministic CM math** (`dmath`). It is the right foundation. Most hobby CM ports get cross-platform float drift wrong.
 - **[E] Bucket layout.** One cache line per (context, nibble), checksummed, with inheritance from the parent order. It gave the single largest CM gain (v0 → v1, −8.2% on enwik7).
 - **[E] Token → bit marginalisation through a trie, with a lookahead head for the delimiter.** It lets a word-level LM drive a bitwise CM without the CM knowing about tokens. As far as we know this precise construction (first-token distribution, plus a Q head for the delimiter, plus out-of-vocabulary mass) is our own. NNCP and cmix work at byte or BPE level in different ways.
-- **[E] Ablation switches on every new component** (`XZIP_TUNE=xoff=…`, `m7=0`, `fm=0`, …), so every claimed gain is measured against its own absence.
+- **[E] Ablation switches on every new component** (`SHIRO_TUNE=xoff=…`, `m7=0`, `fm=0`, …), so every claimed gain is measured against its own absence.
 
 ### F.4 Fundamental limitations of the current approach
 
@@ -152,7 +152,7 @@ The file-order references are 17,780,730 (CM) and 16,637,907 (hybrid).
 
 These are the results that decide what is worth trying. Proofs are sketched; full derivations go in stage 2 (deliverable D).
 
-**8.1 No compressor beats another on every input. [E]** There are 2ⁿ strings of length n, but only 2ⁿ − 1 binary strings shorter than n. So any lossless code that shrinks some inputs must expand others; this is the counting argument. Against an arbitrary competitor this is unavoidable: any input xzip saves bytes on is paid for elsewhere. LTCB is one fixed file, so the real question is only *how much prior structure about enwik9 can we exploit, and for how few bytes of decompressor*.
+**8.1 No compressor beats another on every input. [E]** There are 2ⁿ strings of length n, but only 2ⁿ − 1 binary strings shorter than n. So any lossless code that shrinks some inputs must expand others; this is the counting argument. Against an arbitrary competitor this is unavoidable: any input shiro saves bytes on is paid for elsewhere. LTCB is one fixed file, so the real question is only *how much prior structure about enwik9 can we exploit, and for how few bytes of decompressor*.
 
 **8.2 What a model costs. [E]** LTCB counts compressed size + decompressor size. That is a two-part MDL code (Rissanen 1978): L(model) + L(data | model).
 
@@ -173,7 +173,7 @@ So "online learning means a free model" is wrong in a precise sense: you pay the
 
 Fitting it to our two NN points (enwik7 2.02 bpc, enwik8 1.555 bpc) gives one equation in three unknowns. **We need at least 3 file sizes to fit it.** That is a cheap experiment: the 20 MB prefix run in progress is the third point.
 
-**8.6 What this means for xzip.**
+**8.6 What this means for shiro.**
 - The NN's value grows with file size. Its early loss amortises, which is why the hybrid gain went from −2.7% on enwik7 to −7.3% on enwik8.
 - So enwik9 *should* favour the NN more than enwik8 does. That is a hypothesis to measure on a prefix of enwik9, not a fact.
 - The CM's value is fast convergence on exact repeats, which the NN learns slowly.

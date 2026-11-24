@@ -2,7 +2,7 @@
 
 Reports the NN-only code length (bits/byte over the token stream) and writes a
 side file of per-bit probabilities (N x 8 uint16, 0 = no prediction) that the
-Rust CM mixes in (`xzip eval <file> --side <side>`).
+Rust CM mixes in (`shiro eval <file> --side <side>`).
 
 NNCP-style: the token stream is cut into B contiguous streams processed in
 lockstep. Each step codes the next T tokens of every stream with weights frozen

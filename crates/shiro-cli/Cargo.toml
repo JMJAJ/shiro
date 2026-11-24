@@ -1,11 +1,11 @@
 [package]
-name = "xzip-cli"
+name = "shiro-cli"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "xzip"
+name = "shiro"
 path = "src/main.rs"
 
 [dependencies]
-xzip-core = { path = "../xzip-core" }
+shiro-core = { path = "../shiro-core" }

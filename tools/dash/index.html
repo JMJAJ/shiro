@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>xzip lab</title>
+<title>shiro lab</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
@@ -184,7 +184,7 @@ canvas.plot { width: 100%; height: 100%; display: block; cursor: crosshair; }
 <body>
 <div class="app">
   <aside class="sb">
-    <div class="sb-head"><div class="sb-title">xzip lab</div><div class="sb-sub" id="sb-rev"></div></div>
+    <div class="sb-head"><div class="sb-title">shiro lab</div><div class="sb-sub" id="sb-rev"></div></div>
     <div class="sb-sec">Workspace</div>
     <nav class="nav" id="nav">
       <button data-v="overview"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>Overview</button>
@@ -199,7 +199,7 @@ canvas.plot { width: 100%; height: 100%; display: block; cursor: crosshair; }
   </aside>
 
   <main class="main">
-    <div class="hdr"><span class="crumb">xzip /</span><h1 id="hdr-title">Overview</h1><div class="sp"></div><div id="hdr-actions" class="row"></div></div>
+    <div class="hdr"><span class="crumb">shiro /</span><h1 id="hdr-title">Overview</h1><div class="sp"></div><div id="hdr-actions" class="row"></div></div>
 
     <!-- overview -->
     <section class="page" id="v-overview">
@@ -233,7 +233,7 @@ canvas.plot { width: 100%; height: 100%; display: block; cursor: crosshair; }
     <section class="page hide" id="v-live">
       <div id="live-err"></div>
       <div class="grid g4" id="live-tiles"></div>
-      <div class="card mt"><div class="card-h">Processes <span class="sub">xzip, nn/online, sweeps</span></div><div id="procs"></div></div>
+      <div class="card mt"><div class="card-h">Processes <span class="sub">shiro, nn/online, sweeps</span></div><div id="procs"></div></div>
       <div class="grid mt" style="grid-template-columns: 420px minmax(0,1fr);">
         <div class="card"><div class="card-h">Job logs</div><div id="logs"></div></div>
         <div class="card"><div class="card-h"><span id="log-name">Log</span><span class="sub" id="log-sub"></span><div class="sp" style="flex:1"></div><label class="saved row"><input type="checkbox" id="log-follow" checked> follow</label></div><pre class="term" id="log-text">Select a log</pre></div>
@@ -317,7 +317,7 @@ const S = { runs: [], status: null, lab: { formulas: [], notes: [] }, view: "ove
 const TITLES = { overview: "Overview", runs: "Runs", live: "Live", lab: "Formula lab", journal: "Journal" };
 function show(v) {
   S.view = v;
-  try { localStorage.setItem("xzip.view", v); } catch (e) {}
+  try { localStorage.setItem("shiro.view", v); } catch (e) {}
   $$("#nav button").forEach(b => b.classList.toggle("on", b.dataset.v === v));
   $$("section.page").forEach(s => s.classList.toggle("hide", s.id !== "v-" + v));
   $("#hdr-title").textContent = TITLES[v];
@@ -490,7 +490,7 @@ function procLabel(a) {
   if (a.includes("nn/online.py")) return "nn " + (a.match(/data\/\S+/) || [""])[0].replace("data/", "");
   if (a.includes("hybrid.sh")) return "hybrid " + (a.match(/data\/\S+/) || [""])[0].replace("data/", "");
   if (a.includes("sweep")) return "sweep";
-  if (a.includes("xzip eval")) return "cm eval " + (a.match(/data\/\S+/) || [""])[0].replace("data/", "");
+  if (a.includes("shiro eval")) return "cm eval " + (a.match(/data\/\S+/) || [""])[0].replace("data/", "");
   return a.split(" ")[0];
 }
 function parseProgress(line) { const m = line.match(/~\s*([\d.]+)%/); return m ? parseFloat(m[1]) : null; }
@@ -498,12 +498,12 @@ async function loadStatus() {
   try { S.status = await api("/api/status"); } catch (e) { S.status = { error: String(e) }; }
   const st = S.status;
   const dot = $("#conn-dot"), txt = $("#conn-txt");
-  if (st.error) { dot.className = "dot err"; txt.textContent = st.error.includes("disabled") ? "laptop: off (no XZIP_PASS)" : "laptop: error"; }
+  if (st.error) { dot.className = "dot err"; txt.textContent = st.error.includes("disabled") ? "laptop: off (no SHIRO_PASS)" : "laptop: error"; }
   else { dot.className = "dot live"; txt.textContent = "laptop · " + (st.gpu ? st.gpu.util + "% gpu" : "connected"); }
   // sidebar jobs
   const sj = $("#sb-jobs"); sj.textContent = "";
   const procs = (st.procs || []).filter(p => !p.args.startsWith("bash -c") && !p.args.includes("sweep.sh") || p.args.includes("hybrid.sh"));
-  const main = (st.procs || []).filter(p => /nn\/online|release\/xzip/.test(p.args));
+  const main = (st.procs || []).filter(p => /nn\/online|release\/shiro/.test(p.args));
   $("#n-live").textContent = main.length || "";
   if (!main.length) sj.append(h("div", { class: "sb-row" }, h("span", { class: "dot" }), h("span", { class: "t" }, st.error ? "—" : "idle")));
   for (const p of main) sj.append(h("div", { class: "sb-row", onclick: () => show("live"), title: p.args }, h("span", { class: "dot live" }), h("span", { class: "t" }, procLabel(p.args)), h("span", { style: "margin-left:auto;font:11px var(--mono);color:var(--faint)" }, fmtDur(p.etimes))));
@@ -513,7 +513,7 @@ function renderLive() {
   const st = S.status;
   const e = $("#live-err"); e.textContent = "";
   if (!st) return;
-  if (st.error) { e.append(h("div", { class: "err-box" }, st.error, st.error.includes("disabled") ? "  →  start the server with XZIP_PASS set to see the laptop." : "")); }
+  if (st.error) { e.append(h("div", { class: "err-box" }, st.error, st.error.includes("disabled") ? "  →  start the server with SHIRO_PASS set to see the laptop." : "")); }
   const t = $("#live-tiles"); t.textContent = "";
   const tile = (l, v, s, pct) => h("div", { class: "card kpi" }, h("div", { class: "l" }, l), h("div", { class: "v" }, v), h("div", { class: "s" }, s), pct != null ? h("div", { class: "meter" }, h("div", { style: `width:${pct}%` })) : null);
   if (st.cpu != null) t.append(tile("CPU", st.cpu.toFixed(0) + "%", (st.uptime || "").replace(/^.*load average/, "load"), st.cpu));
@@ -637,7 +637,7 @@ async function loadLab() {
   S.lab = await api("/api/lab");
   S.lab.formulas = S.lab.formulas || []; S.lab.notes = S.lab.notes || [];
   $("#n-lab").textContent = S.lab.formulas.length; $("#n-notes").textContent = S.lab.notes.length;
-  let v = null; try { v = localStorage.getItem("xzip.formula"); } catch (e) {}
+  let v = null; try { v = localStorage.getItem("shiro.formula"); } catch (e) {}
   S.fSel = S.lab.formulas.find(f => f.id === v) || S.lab.formulas[0] || null;
   S.nSel = S.lab.notes[S.lab.notes.length - 1] || null;
   render();
@@ -657,7 +657,7 @@ function renderLabList() {
   for (const f of S.lab.formulas) if (!ql || (f.title + f.tag + f.tex + f.notes).toLowerCase().includes(ql)) (groups[f.tag || "other"] = groups[f.tag || "other"] || []).push(f);
   for (const [tag, fs] of Object.entries(groups)) {
     list.append(h("div", { class: "sb-sec", style: "padding:10px 10px 4px" }, tag));
-    for (const f of fs) list.append(h("div", { class: "lab-item" + (S.fSel === f ? " on" : ""), onclick: () => { S.fSel = f; try { localStorage.setItem("xzip.formula", f.id); } catch (e) {} renderLab(); } },
+    for (const f of fs) list.append(h("div", { class: "lab-item" + (S.fSel === f ? " on" : ""), onclick: () => { S.fSel = f; try { localStorage.setItem("shiro.formula", f.id); } catch (e) {} renderLab(); } },
       h("div", { class: "t" }, f.title), h("div", { class: "m" }, f.exprs.length + " curve" + (f.exprs.length > 1 ? "s" : "") + " · " + f.params.length + " param" + (f.params.length !== 1 ? "s" : ""))));
   }
 }
@@ -780,7 +780,7 @@ function renderJournal() {
 }
 
 // ---------------- boot ----------------
-let v0 = "overview"; try { v0 = localStorage.getItem("xzip.view") || "overview"; } catch (e) {}
+let v0 = "overview"; try { v0 = localStorage.getItem("shiro.view") || "overview"; } catch (e) {}
 show(TITLES[v0] ? v0 : "overview");
 loadRuns(false);
 loadLab();

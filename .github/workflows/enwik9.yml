@@ -11,7 +11,7 @@ on:
         description: "table bits"
         default: "22"
       tune:
-        description: "XZIP_TUNE (empty = defaults)"
+        description: "SHIRO_TUNE (empty = defaults)"
         default: ""
       variants:
         description: "JSON list from: file, decodable-B24-T256"
@@ -61,7 +61,7 @@ jobs:
 
       - name: Eval
         env:
-          XZIP_TUNE: ${{ inputs.tune }}
+          SHIRO_TUNE: ${{ inputs.tune }}
         run: |
           mkdir -p out
           extra=""
@@ -70,7 +70,7 @@ jobs:
           left=$(( JOB_START + 352*60 - $(date +%s) ))
           echo "eval budget: $(( left / 60 )) min"
           set +e
-          timeout -s INT "$left" ./target/release/xzip eval data/enwik9 --bits ${{ inputs.bits }} $extra \
+          timeout -s INT "$left" ./target/release/shiro eval data/enwik9 --bits ${{ inputs.bits }} $extra \
             --log out/runs.jsonl --rev "$(git rev-parse --short HEAD)" \
             --note "gha enwik9 ${{ matrix.variant }} bits=${{ inputs.bits }} tune=${{ inputs.tune }}" \
             2>&1 > out/result.txt | tr '\r' '\n' | tee out/progress.txt

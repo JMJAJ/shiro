@@ -1,4 +1,4 @@
-# A/B sweep: each line of `runs` is "<git ref> [XZIP_TUNE spec]" and gets its own
+# A/B sweep: each line of `runs` is "<git ref> [SHIRO_TUNE spec]" and gets its own
 # runner (up to 20 in parallel, free on a public repo). The first line is the
 # baseline; the summary table gives every run's delta against it.
 #   gh workflow run sweep.yml -f file=enwik7 -f runs=$'main\nmy-branch\nmain lr_hi=0.02'
@@ -110,10 +110,10 @@ jobs:
         run: cargo build --release 2>&1 | tail -3
       - name: Eval
         env:
-          XZIP_TUNE: ${{ matrix.tune }}
+          SHIRO_TUNE: ${{ matrix.tune }}
         run: |
           mkdir -p out
-          ./x/target/release/xzip eval data/in --bits ${{ matrix.bits || inputs.bits }} $EXTRA \
+          ./x/target/release/shiro eval data/in --bits ${{ matrix.bits || inputs.bits }} $EXTRA \
             --log out/run.jsonl --rev "$(git -C x rev-parse --short HEAD)" \
             --note "${{ matrix.ref }}" 2>/dev/null | tee out/result.txt
           python3 - <<'EOF'

@@ -7,7 +7,7 @@
     python tools/remote.py log <name> [lines]   # tail that log
     python tools/remote.py get <remote> <local> # fetch a file
 
-Connection comes from env: XZIP_HOST, XZIP_USER, XZIP_PASS, XZIP_DIR (default xzip) (password is never
+Connection comes from env: SHIRO_HOST, SHIRO_USER, SHIRO_PASS, SHIRO_DIR (default xzip) (password is never
 written to disk). Requires paramiko.
 """
 import io
@@ -19,7 +19,7 @@ import tarfile
 import paramiko
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-REMOTE_DIR = os.environ.get("XZIP_DIR", "xzip")
+REMOTE_DIR = os.environ.get("SHIRO_DIR", "xzip")
 EXCLUDE_DIRS = {"target", "data", ".git", "__pycache__", "logs"}
 
 
@@ -27,14 +27,14 @@ def connect():
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     c.connect(
-        os.environ.get("XZIP_HOST", "192.168.0.116"),
-        username=os.environ.get("XZIP_USER", "Jxint"),
-        password=os.environ.get("XZIP_PASS"),
+        os.environ.get("SHIRO_HOST", "192.168.0.116"),
+        username=os.environ.get("SHIRO_USER", "Jxint"),
+        password=os.environ.get("SHIRO_PASS"),
         timeout=60,
         banner_timeout=120,
         auth_timeout=120,
-        allow_agent=os.environ.get("XZIP_PASS") is None,
-        look_for_keys=os.environ.get("XZIP_PASS") is None,
+        allow_agent=os.environ.get("SHIRO_PASS") is None,
+        look_for_keys=os.environ.get("SHIRO_PASS") is None,
     )
     return c
 

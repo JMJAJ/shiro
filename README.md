@@ -1,4 +1,4 @@
-# xzip
+# shiro
 
 A research log for one question: can a small online transformer and a classic context-mixing compressor, run together, set a new best total on enwik9 under the rules of the [Large Text Compression Benchmark](http://mattmahoney.net/dc/text.html)?
 
@@ -27,7 +27,7 @@ This page is the story so far: what was tried, what moved the number, what didn'
 
 Context mixing (CM, the paq/cmix family) is very good at local, exact statistics: repeated strings, markup, numbers, the structure of wiki templates. It learns from a single example. Transformers are good at what CM is bad at: semantics, long-range topic and grammar. They need many examples to get there.
 
-So xzip runs both. The transformer is trained *online*, predicting each token before it learns from it. Its prediction is converted into one probability per bit and fed to the CM's mixer as one more input. The mixer learns, context by context, when to trust which model. The bet is that the two models make different mistakes, so the mix beats either one alone by more than the cost of running both.
+So shiro runs both. The transformer is trained *online*, predicting each token before it learns from it. Its prediction is converted into one probability per bit and fed to the CM's mixer as one more input. The mixer learns, context by context, when to trust which model. The bet is that the two models make different mistakes, so the mix beats either one alone by more than the cost of running both.
 
 That bet has held so far. On enwik8 the transformer alone is *worse* than the CM (19.44 MB vs 18.16 MB), yet adding it cuts the CM's output by **7.3%**.
 
@@ -37,10 +37,10 @@ That bet has held so far. On enwik8 the transformer alone is *worse* than the CM
 
 ### Day 1: building the CM from scratch
 
-The CM is written in Rust: [crates/xzip-core](crates/xzip-core). The fundamentals came first:
+The CM is written in Rust: [crates/shiro-core](crates/shiro-core). The fundamentals came first:
 
 - a 32-bit carryless binary arithmetic coder with 24-bit probabilities;
-- `exp` and `ln` built from basic IEEE operations only ([dmath.rs](crates/xzip-core/src/dmath.rs)), so the output is bit-identical on Windows and Linux. A compressor whose decoder disagrees with its encoder in the last float bit is useless, so this went in before any modelling.
+- `exp` and `ln` built from basic IEEE operations only ([dmath.rs](crates/shiro-core/src/dmath.rs)), so the output is bit-identical on Windows and Linux. A compressor whose decoder disagrees with its encoder in the last float bit is useless, so this went in before any modelling.
 
 Then the model, in four rounds. All numbers are enwik7.
 
@@ -96,7 +96,7 @@ Two goals: a stronger CM partner, and faster ways to test fusion.
 
 **What landed.**
 
-- **New contexts, one at a time, with an off switch for each.** Each of the four day-2 contexts was measured by turning it off alone (`XZIP_TUNE=xoff=...`). Every one paid for itself, but only by 0.01–0.08% each, 0.32% together.
+- **New contexts, one at a time, with an off switch for each.** Each of the four day-2 contexts was measured by turning it off alone (`SHIRO_TUNE=xoff=...`). Every one paid for itself, but only by 0.01–0.08% each, 0.32% together.
   - The markup-segment context helped most: which wiki construct we're inside (`[[`, `|`, `=`, `{`, list markers), how far into it, and the current word.
   - The number context came next.
   - The XML-tag context barely registered on enwik7. It stays in because enwik9 has proportionally more header structure.
@@ -149,7 +149,7 @@ Lesson logged: smoke tests must use the exact production flags, and job watchers
 
 ### Fusion: where the next gains probably are
 
-Right now the transformer enters the CM in three ways: as one mixer input, as a present/absent flag, and as the selector for one mixer's weight set. That is the bare minimum. Ideas being tested next, against saved prediction files (`~/xzip-side/`), so the fusion can be iterated in 20 minutes without retraining:
+Right now the transformer enters the CM in three ways: as one mixer input, as a present/absent flag, and as the selector for one mixer's weight set. That is the bare minimum. Ideas being tested next, against saved prediction files (`~/shiro-side/`), so the fusion can be iterated in 20 minutes without retraining:
 
 - **`sf`:** the transformer's prediction also goes into the final blend, both raw and through an APM keyed by the partial byte and the previous byte. In the code; not yet measured.
 - **B1 in the plan:** use the transformer's *hidden state*, not just its prediction, to select the mixer's weights.
@@ -172,10 +172,10 @@ The CM works on its own anywhere Rust does:
 
 ```sh
 cargo build --release
-./target/release/xzip c  input  output.xzp      # compress
-./target/release/xzip d  output.xzp  restored   # decompress
-./target/release/xzip eval input --bits 22      # code length + per-region breakdown
-XZIP_TUNE="m7=0,xoff=8" ./target/release/xzip eval input   # ablations (eval only)
+./target/release/shiro c  input  output.xzp      # compress
+./target/release/shiro d  output.xzp  restored   # decompress
+./target/release/shiro eval input --bits 22      # code length + per-region breakdown
+SHIRO_TUNE="m7=0,xoff=8" ./target/release/shiro eval input   # ablations (eval only)
 ```
 
 The hybrid needs a CUDA GPU and PyTorch:
@@ -191,7 +191,7 @@ tools/nnsweep.sh data/enwik7 "" "--inner 2"          # transformer-only sweep
 ### The lab
 
 ```sh
-XZIP_PASS=... python tools/dash/server.py      # then open http://127.0.0.1:8765
+SHIRO_PASS=... python tools/dash/server.py      # then open http://127.0.0.1:8765
 ```
 
 A local dashboard with four views. It serves on 127.0.0.1 only.
@@ -206,8 +206,8 @@ Formulas and journal notes are saved to [tools/dash/lab.json](tools/dash/lab.jso
 ## Layout
 
 ```
-crates/xzip-core   CM model, arithmetic coder, deterministic math, region classifier
-crates/xzip-cli    the xzip binary: c / d / eval
+crates/shiro-core   CM model, arithmetic coder, deterministic math, region classifier
+crates/shiro-cli    the shiro binary: c / d / eval
 nn/                tokenizer + trie marginaliser, online transformer
 tools/             remote runner, sweeps, hybrid pipeline
 results/           runs.jsonl: every measurement, with git revision and settings

@@ -1,4 +1,4 @@
-# xzip — Plan
+# shiro — Plan
 
 **Goal:** a lossless compressor that sets a new best total size on `enwik9` under Large Text Compression Benchmark (LTCB) rules, and runs on **this machine**.
 **Written:** 2026-11-22. Revise it at every phase gate.
@@ -27,7 +27,7 @@ From the full LTCB table (pasted by the user on 2026-11-22) and tufalabs.ai/rese
 
 **What this tells us**
 
-- tufazip is the best *pure-neural* entry, but it sits about **16 MB behind** the hybrids. The frontier is hybrid: transformer plus context mixing (CM) plus match models. xzip is a hybrid from day one.
+- tufazip is the best *pure-neural* entry, but it sits about **16 MB behind** the hybrids. The frontier is hybrid: transformer plus context mixing (CM) plus match models. shiro is a hybrid from day one.
 - The top entries take **1.5–4 days** per run and use **~10 GB** of RAM. That is our class.
 - Compressed weights and dictionaries count toward the total. A source-code decompressor ("s") is counted by its source size.
 
@@ -49,7 +49,7 @@ From the full LTCB table (pasted by the user on 2026-11-22) and tufalabs.ai/rese
 
 ---
 
-## 1. Thesis: where xzip finds its bytes
+## 1. Thesis: where shiro finds its bytes
 
 tufazip's own results show where its bytes go.
 
@@ -58,7 +58,7 @@ tufazip's own results show where its bytes go.
 3. **Prior weights pay off only when they are tiny.** L6 predicted better than C2 but lost on total size because of its weight bytes. The value is in *compact* priors.
 4. **File order is arbitrary.** Reordering articles by similarity is already proven: the STARLIT Hutter Prize entry did it. It moves information closer to where it is used.
 
-So xzip is **an online-learned transformer (GPU) fused at bit level with a strong CM and match-model stack (CPU), fed by reversible enwik-specific preprocessing.** Our original contributions are the six bets in §3.
+So shiro is **an online-learned transformer (GPU) fused at bit level with a strong CM and match-model stack (CPU), fed by reversible enwik-specific preprocessing.** Our original contributions are the six bets in §3.
 
 ---
 
@@ -97,14 +97,14 @@ enwik9 ──► [P1] reversible preprocessing ──► [P2] article reorder �
   - The GPU side uses fixed shapes, no atomics, `torch.use_deterministic_algorithms(True)` and `CUBLAS_WORKSPACE_CONFIG`, on the same GPU model for encoding and decoding. LTCB allows this.
   - Mixer inputs that come from the GPU are **quantized to 12-bit fixed point before they cross to the CPU**, so floating-point noise can't leak into the coder.
 - **Stack**
-  - **Rust** (`xzip-core`) for the arithmetic coder, CM, match model, mixer, preprocessing and the bit-exact codec. It is exposed to Python through PyO3.
-  - **Python + PyTorch** (`xzip-nn`) for the transformer.
+  - **Rust** (`shiro-core`) for the arithmetic coder, CM, match model, mixer, preprocessing and the bit-exact codec. It is exposed to Python through PyO3.
+  - **Python + PyTorch** (`shiro-nn`) for the transformer.
   - The submission is source plus compressed weights. PyTorch is a public dependency and is not shipped.
   - Native Windows first. Move to WSL2 only if we need Triton or `torch.compile`.
 
 ---
 
-## 3. The six xzip bets (ranked by expected bytes per unit of effort)
+## 3. The six shiro bets (ranked by expected bytes per unit of effort)
 
 Each bet has a hypothesis, a cheap test, and a **kill criterion**. The test comes before any effort to make it fast.
 
@@ -151,7 +151,7 @@ Gate targets are in **enwik9 total bytes**. Before a full run they are projected
 ### Phase 0: Foundations (week 1)
 - Run `git init` and create the repo layout (§6). Download enwik8 and enwik9 and check their hashes.
 - Measure baselines on our machine: `xz`, `zstd --ultra -22`, and **cmix v21 and fx2-cmix on `e7` and `e8`**. These calibrate how fast this CPU is against the LTCB timings, and give us a strong reference.
-- Find out which top-10 entries have public source and how they work, ex-girlfriend and cmix-neif first. Pick a **reference implementation** to compare against and learn from. Licensing note: cmix and paq are GPL. Porting their ideas is fine, and any copied code makes xzip GPL.
+- Find out which top-10 entries have public source and how they work, ex-girlfriend and cmix-neif first. Pick a **reference implementation** to compare against and learn from. Licensing note: cmix and paq are GPL. Porting their ideas is fine, and any copied code makes shiro GPL.
 - **Gate:** the harness reports ideal code length plus a region breakdown on `e6` and `e7`, and the baselines are logged.
 
 ### Phase 1: CM core in Rust (weeks 2–4)
@@ -167,7 +167,7 @@ Gate targets are in **enwik9 total bytes**. Before a full run they are projected
 - **Gate:** `e8` ≤ about 17.5 MB (paq8px class) at ≤ 300 µs/byte, and a bit-exact roundtrip on `e8`.
 
 ### Phase 2: Neural model plus fusion (weeks 4–8)
-- `xzip-nn`: a decoder-only transformer with RoPE, SwiGLU, RMSNorm and QK-norm (tufazip's recipe).
+- `shiro-nn`: a decoder-only transformer with RoPE, SwiGLU, RMSNorm and QK-norm (tufazip's recipe).
   - Start at about 40–80M params, 4K word vocabulary, 256–512 token context.
   - Training is online in macro-blocks with B lockstep streams.
 - F1: trie marginalization from token distributions to next-bit predictions. Mixer inputs are quantized to fixed point.
@@ -193,11 +193,11 @@ Gate targets are in **enwik9 total bytes**. Before a full run they are projected
 ## 6. Repo layout
 
 ```
-xzip/
+shiro/
   PLAN.md
   crates/
-    xzip-core/      # Rust: coder, CM models, match, mixer, SSE, preprocessing, PyO3 bindings
-    xzip-cli/       # Rust: `xzip c|d|eval` entry point
+    shiro-core/      # Rust: coder, CM models, match, mixer, SSE, preprocessing, PyO3 bindings
+    shiro-cli/       # Rust: `shiro c|d|eval` entry point
   nn/               # Python: transformer, online trainer, replay, trie marginalisation
   harness/          # Python: rung runner, ideal-codelength eval, region breakdown, results log
   data/             # enwik8, enwik9 (git-ignored) + sha256 manifest
@@ -233,7 +233,7 @@ This track is out of scope until Phase 4's gate.
 
 ## 9. Status log
 
-**Test box** (from 2026-11-22): Fedora 44 laptop, Ryzen 7 250 (8 cores / 16 threads), 30 GB RAM, RTX 5050 Laptop 8 GB. Code is written on the Windows PC and run there via `tools/remote.py`. Data lives in `~/xzip/data` and every run is logged to `results/runs.jsonl`.
+**Test box** (from 2026-11-22): Fedora 44 laptop, Ryzen 7 250 (8 cores / 16 threads), 30 GB RAM, RTX 5050 Laptop 8 GB. Code is written on the Windows PC and run there via `tools/remote.py`. Data lives in `~/shiro/data` and every run is logged to `results/runs.jsonl`.
 
 | Date | Milestone | enwik7 | enwik8 |
 |---|---|---|---|
@@ -253,4 +253,4 @@ NN sweep (enwik7, NN-only): lr 1e-3 is best (2e-3 +0.5%, 3e-3 +1.1%); `--inner 2
 Phase 2 groundwork is in place:
 - `nn/tokenizer.py`: reversible word tokenizer plus vocabulary trie.
 - `nn/online.py`: online transformer with lockstep streams and GPU token→bit conversion (§B7, using a lookahead head for the byte after each word).
-- `xzip eval --side`: mixes the neural predictions into the CM.
+- `shiro eval --side`: mixes the neural predictions into the CM.

@@ -8,7 +8,7 @@ in the order s = 0.., b = 0..B-1 -- not in file order.
 
     python tools/schedule.py <file> <out.order> --B 24 --T 256 [--vocab 16384]
 
-Output: u64 LE (start, end) byte ranges, for `xzip eval --order`.
+Output: u64 LE (start, end) byte ranges, for `shiro eval --order`.
 Must use the same tokenizer settings as the NN run.
 """
 import argparse

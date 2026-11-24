@@ -1,6 +1,6 @@
-# xzip — Math & Algorithms Reference
+# shiro — Math & Algorithms Reference
 
-This is the reference for the formulas and algorithms xzip uses. Every component in [PLAN.md](PLAN.md) maps to a section here.
+This is the reference for the formulas and algorithms shiro uses. Every component in [PLAN.md](PLAN.md) maps to a section here.
 Notation: `x_t` is the symbol at time t (a bit, byte or token), `p` is a probability, `σ(z) = 1/(1+e^-z)`, `st(p) = ln(p/(1-p))` is the stretch function and `sq = σ` is its inverse (squash), and `y` is the bit that actually occurred.
 
 **What it covers**
@@ -125,7 +125,7 @@ p_final = SSE-chain( Mixer₂( Mixer₁ₐ(…), Mixer₁ᵦ(…), … ) )   cla
 
 ## D. Forgotten gems (older ideas nobody in the top 20 obviously uses fully)
 
-| # | Gem | The math | How xzip uses it |
+| # | Gem | The math | How shiro uses it |
 |---|---|---|---|
 | D1 | **Dynamic evaluation with decay to the prior** (Krause et al. 2018–19) | `θ ← θ − η·∇ℓ / √(MS + ε) + λ(θ₀ − θ)` | **Pull weights back toward the stored prior** θ₀. Fast adaptation to the current article stops slowly overwriting what the prior knows. It pairs with B5, and is one line of code. |
 | D2 | **Fixed-share / switching experts** (Herbster & Warmuth 1998) | After the Bayes update, `w_i ← (1−α)·w_i + α/n` | A top-level mixture that recovers quickly when the best model changes, for example at article boundaries (prose → table → reference list). Use it as a final stage alongside the logistic mixer. |
@@ -138,7 +138,7 @@ p_final = SSE-chain( Mixer₂( Mixer₁ₐ(…), Mixer₁ᵦ(…), … ) )   cla
 
 ---
 
-## E. New xzip ideas from this analysis
+## E. New shiro ideas from this analysis
 
 ### E1. Encoder-steered online learning ("side-information training"), now bet **B7**
 The encoder sees the future and the decoder doesn't. We can still make use of that, cheaply:

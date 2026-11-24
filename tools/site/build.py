@@ -131,7 +131,7 @@ def main():
         sweeps.append({
             "id": rid, "kind": "cmx" if is_cmx else "cm",
             "title": title or (f"cmx {rs[0].get('mb')} MB" if is_cmx else f"{rs[0].get('file', '')}"),
-            "created": m.get("createdAt") or "", "url": m.get("url") or f"https://github.com/JMJAJ/xzip/actions/runs/{rid}",
+            "created": m.get("createdAt") or "", "url": m.get("url") or f"https://github.com/JMJAJ/shiro/actions/runs/{rid}",
             "file": rs[0].get("file", ""), "mb": rs[0].get("mb"), "base": base, "shared": shared, "rows": rows,
         })
     sweeps.sort(key=lambda s: (s["created"] or "", s["id"]))
@@ -171,7 +171,7 @@ def main():
 
     data = {
         "generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "repo": "JMJAJ/xzip",
+        "repo": "JMJAJ/shiro",
         "ltcb": [{"name": n, "bytes": b} for n, b in LTCB],
         "sweeps": sweeps, "runs": runs, "stream_rate": stream, "live": live, "formulas": formulas,
     }

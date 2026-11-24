@@ -1,4 +1,4 @@
-//! xzip CM model v4.
+//! shiro CM model v4.
 //!
 //! - Hashed contexts live in 64-byte checksummed buckets, one bucket per
 //!   (context, nibble): 15 bit-slots for the nibble's binary tree, plus a
@@ -374,7 +374,7 @@ impl MatchModel {
 // ---------- tuning knobs ----------
 
 /// Research knobs. Archives always use `Tune::default()`; `eval` may override
-/// via `XZIP_TUNE="key=val,key=val"` for parameter sweeps.
+/// via `SHIRO_TUNE="key=val,key=val"` for parameter sweeps.
 #[derive(Clone, Debug)]
 pub struct Tune {
     pub lr_hi: f32,

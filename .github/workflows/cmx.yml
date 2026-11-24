@@ -81,7 +81,7 @@ jobs:
         id: defs
         run: |
           {
-            echo '// xzip research build overrides, written by .github/workflows/cmx.yml'
+            echo '// shiro research build overrides, written by .github/workflows/cmx.yml'
             echo '#pragma once'
             for d in ${{ matrix.defs }}; do d=${d#-D}; echo "#define ${d%%=*} ${d#*=}"; done
           } > x/cmx/src/xz_build.h

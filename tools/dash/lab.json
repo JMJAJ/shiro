@@ -55,7 +55,7 @@
      "value": 1
     }
    ],
-   "notes": "Mixers work in the stretch domain. Inputs are st(p_i), the output is sigma of a weighted sum. Curve 2 is stretch, rescaled to fit the same axes. xzip computes both with dmath, from basic IEEE operations only, so the encoder and decoder agree bit for bit."
+   "notes": "Mixers work in the stretch domain. Inputs are st(p_i), the output is sigma of a weighted sum. Curve 2 is stretch, rescaled to fit the same axes. shiro computes both with dmath, from basic IEEE operations only, so the encoder and decoder agree bit for bit."
   },
   {
    "id": "counter",

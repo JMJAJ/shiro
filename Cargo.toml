@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/xzip-core", "crates/xzip-cli"]
+members = ["crates/shiro-core", "crates/shiro-cli"]
 
 [profile.release]
 opt-level = 3

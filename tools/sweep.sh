@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run several XZIP_TUNE configs in parallel on one file; print a sorted table.
+# Run several SHIRO_TUNE configs in parallel on one file; print a sorted table.
 #   tools/sweep.sh <file> <bits> "<spec1>" "<spec2>" ...      (spec "" = defaults)
 # Every run is appended to results/runs.jsonl with note "sweep".
 set -u
@@ -8,7 +8,7 @@ rev=$(cat .rev 2>/dev/null || echo nogit)
 tmp=$(mktemp -d)
 i=0
 for spec in "$@"; do
-  ( XZIP_TUNE="$spec" ./target/release/xzip eval "$file" --bits "$bits" \
+  ( SHIRO_TUNE="$spec" ./target/release/shiro eval "$file" --bits "$bits" \
       --log results/runs.jsonl --rev "$rev" --note "sweep" 2>/dev/null \
       | awk -v s="$spec" '/^bytes/{print $2 "\t" s}' > "$tmp/$i" ) &
   i=$((i+1))

@@ -1,10 +1,10 @@
 use std::io::Write;
 use std::time::Instant;
-use xzip_core::{compress, decompress, eval_streams, model::ModelConfig, regions};
+use shiro_core::{compress, decompress, eval_streams, model::ModelConfig, regions};
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  xzip c <in> <out> [--bits N]\n  xzip d <in> <out>\n  xzip eval <in> [--bits N] [--log results.jsonl] [--note TEXT] [--rev SHA] [--side FILE] [--order FILE [--streams B]]"
+        "usage:\n  shiro c <in> <out> [--bits N]\n  shiro d <in> <out>\n  shiro eval <in> [--bits N] [--log results.jsonl] [--note TEXT] [--rev SHA] [--side FILE] [--order FILE [--streams B]]"
     );
     std::process::exit(2)
 }
@@ -48,10 +48,10 @@ fn main() {
     }
     let bits = flag(&args, "--bits").map(|v| v.parse().expect("--bits")).unwrap_or(ModelConfig::default().table_bits);
     let mut cfg = ModelConfig { table_bits: bits, ..Default::default() };
-    let tune_spec = std::env::var("XZIP_TUNE").unwrap_or_default();
+    let tune_spec = std::env::var("SHIRO_TUNE").unwrap_or_default();
     if args[1] == "eval" && !tune_spec.is_empty() {
-        cfg.tune = xzip_core::model::Tune::parse(&tune_spec).unwrap_or_else(|e| {
-            eprintln!("XZIP_TUNE: {e}");
+        cfg.tune = shiro_core::model::Tune::parse(&tune_spec).unwrap_or_else(|e| {
+            eprintln!("SHIRO_TUNE: {e}");
             std::process::exit(2)
         });
     }
