@@ -72,14 +72,17 @@ struct Set {
 };
 
 struct Stage {
-  Set s[kSets];
+  Set* s;   // on the heap: up to 64 x 48 x 48 doubles, and the coder lives on the stack (runner.cpp)
   double x[kD];
   double pout = 0.5, pin = 0.5;
   int cur = -1;
 
-  __attribute__((noinline, cold)) Stage() {
+  __attribute__((noinline, cold)) Stage() : s(new Set[kSets]) {
     for (int k = 0; k < kSets; ++k) Reset(s[k]);
   }
+  __attribute__((noinline, cold)) ~Stage() { delete[] s; }
+  Stage(const Stage&) = delete;
+  Stage& operator=(const Stage&) = delete;
 
   static double St16(unsigned int p16) {
     if (p16 < 1u) p16 = 1u;
