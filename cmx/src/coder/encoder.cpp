@@ -67,14 +67,16 @@ void Encoder::Encode(int bit) {
 #endif
   }
   CMXK_LAP(CK_HEAD, cmx_ck)
-  uint32_t p32 = p_->SemCorrect(floor_.P32(p,
+  const uint32_t p_floor = floor_.P32(p,
       p_->bitl_override_,
       p_->AdepthSkipped() ? 1 : 0,
       bb_bitl, p_->bb_z_, p_->bitl_m1raw_, bit_head::MetaOff() ? 1 : 0,
-      (31 - __builtin_clz(p_->BbBitCtx() | 1u)) & 7));
+      (31 - __builtin_clz(p_->BbBitCtx() | 1u)) & 7);
+  uint32_t p32 = p_->SemCorrect(p_floor);
 #if XZ_ONS
   p32 = ons_.P32(p32, ons_pre, p, p_->bitl_m1raw_, p_->bb_z_, p_->AdepthSkipped() ? 1 : 0,
-                 (31 - __builtin_clz(p_->BbBitCtx() | 1u)) & 7, p_->bitl_override_);
+                 (31 - __builtin_clz(p_->BbBitCtx() | 1u)) & 7, p_->bitl_override_,
+                 p_floor, p_->bitl_stage1_, p_->bitl_n_stage1_);
 #endif
   const unsigned int xmid = floor_stage::Mid(x1_, x2_, p32);
   if (bit) {
