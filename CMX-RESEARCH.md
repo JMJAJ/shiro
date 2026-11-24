@@ -34,6 +34,11 @@ gh run download <id> -n summary        # table.md + all.jsonl -> results/gha/cmx
 | on the best config (batches 4–5, Δ vs best): `CMX_ROWDECAY=2` −188 · FLIP 11 −177 · gap 512 −85 · gap 128 −50 · G=7 −30 · ROWDECAY=1 −27 · NLOG 25 ±0 · R,11 −2 · R,12 +68 · R,9 +297 | ≤14.9 GB | |
 | attention window past the trained 2048 (on best): 2560 +10,431 · 3072 +46,142 · 4096 +51,368 | | dead |
 | fxcm context maps ×2 / ×4 (`XZ_CM_MUL`, on defaults): −398 / −542 | +0.7 / +4.9 GB | |
+| **batch 9, ONS final stage** `-DXZ_ONS=1 -DXZ_ONS_LAMLOG=20` on best | 14.3 GB | **−549** (biggest single gain so far) |
+| ONS λ = 1−2⁻¹⁶: 24.2 MB · λ = 1−2⁻¹³: 38.9 MB · eta 0.5 with λ 2⁻¹⁶: 28.0 MB. **It diverges with fast forgetting**, so it needs a stability guard before any full run | | broken |
+| batch 7 on best: FLIP 11 + ROWDECAY 2 −270 · + gap 512 −227 · gap 512 + RD2 −160 · FLIP 11 + gap 512 −134 · MATCH_AGE=1 −87 · FX_KA=900 −87 · SEMTOP=3 −24 · FWK 0.7 −16 | ≤14.9 GB | |
+| batch 7, losers: SEMTOP=1 +26 · KCEN0 +132 · FW 16 blocks +489 (with RD2 +360) · MATCH_AGE=2 +782 · FXLS +1,173 · ADEPTH_TAU 8 +2,434 / 6 +2,869. SEMIN 1 and 2: runner died (~1.8 h) | | dead |
+| batch 8, 36 MB vs wide 12 GB (5,939,343): **best −1,167** (the extra cache's lead grows as it fills: −73 at 30 MB) · wide + CM_MUL 2 −620 (14.5 GB) · TAU_CODE 8 −60 · NLOG 26 ±0 · narrow + R,10 + CM_MUL 2 +90 · narrow + R,10 +636 · FW 16 blocks +1,145 · MIXROW 3 +1,300 · Z3LR +1,665 · MIXSKIP_L0 8 +17,137 · NLOG 26 + CM_MUL 2: runner died | | |
 | M=47 FLIP=11, and best + CM_MUL=2: the runner died after ~3.7 h without uploading, which looks like running out of memory (>~15 GB) | | |
 
 Raw data is in `results/gha/cmx-*.jsonl`.
@@ -56,7 +61,7 @@ Ranked by (expected gain × chance) ÷ cost. The status column tracks each item.
 | 10 | Mixer math: Adam/RMS-normalised updates, weight averaging (Polyak), mixture-of-experts gating by transformer confidence | paq8px/cmix lineage; GLN (Veness et al.) | idea |
 | 11 | SSE/APM chain: 2D interpolated SSE on (p, transformer entropy), final-stage logistic regression on stretch(p) pairs | paq8px APM chains | idea |
 | 12 | Article order v2: order by transformer-embedding similarity (needs a new order block + new stream) | STARLIT/phda ordering; P9 in RESEARCH.md | idea, heavy |
-| 14 | Online Newton Step final stage (`-DXZ_ONS=1`, `cmx/src/ons_stage.h`): second-order logistic combiner behind every other stage on [final p, p before/after BITLSTM, end-mixer logit, gate logit, bias], 16 weight sets, A⁻¹ by Sherman–Morrison with forgetting | Hazan et al. 2007 (log loss is exp-concave). Synthetic test: +0.013 % on an already calibrated input, −5 % on a miscalibrated one | screening (batch 9) |
+| 14 | Online Newton Step final stage (`-DXZ_ONS=1`, `cmx/src/ons_stage.h`): second-order logistic combiner behind every other stage on [final p, p before/after BITLSTM, end-mixer logit, gate logit, bias], 16 weight sets, A⁻¹ by Sherman–Morrison with forgetting | Hazan et al. 2007 (log loss is exp-concave). Synthetic test: +0.013 % on an already calibrated input, −5 % on a miscalibrated one | −549 at λ 1−2⁻²⁰; diverges at faster λ. Next: a stability guard, then stack with FLIP 11 + RD2 |
 | 13 | Two-pass parameter selection: the encoder tries k knob settings per page and codes the choice (log₂ k bits/page) | P5 "encoder-steered" in RESEARCH.md | idea |
 
 ## Log
@@ -65,3 +70,4 @@ Ranked by (expected gain × chance) ÷ cost. The status column tracks each item.
 - 2026-11-24: batches 4–6 done. The best config sits at 14.9 GB and leaves no room on a 16 GB runner, so the overnight batches split. Batch 7 (30 MB, run 45307430312): stacks of FLIP 11, ROWDECAY 2, gap 512 and 16 fast-weight blocks, plus 13 of the screened-and-shelved upstream knobs (SEMIN, SEMTOP, MATCH_AGE, FXLS, ADEPTH_TAU, FX_KA, FWK_MUL, SEM_KCEN0) re-tested on the best config. Batch 8 (36 MB, run 45307436047), on the 12 GB wide config: CM_MUL 2, 2^26 key ring, ROWDECAY, mixer-row and skip knobs, plus the best config itself at 36 MB as a memory test. 36 MB runs past the 2^25 key ring, so this is where NLOG 26 should first show a gain.
 - PPMd is built as order 25 with a 14,000 MB pool (`Predictor::AddPPMD`). The pool grows over the full file, so the RSS figures from the screens understate the full-run peak. Check this before picking the release config.
 - 2026-11-24: batch 9 (run 45310493581) is 4 variants of the new ONS final stage on the best config (eta 1 / 0.5, lambda 1−2⁻¹³ / 2⁻¹⁶ / 2⁻²⁰). Compare against 4,937,002. It queues behind batches 7–8. Jobs of batches 7–8 that start after commit 1c13702 build the new tree, but with `XZ_ONS` unset the stage is compiled out, so their bytes are unchanged.
+- 2026-11-24: batches 7–9 done. New best candidate on paper: best + FLIP 11 + ROWDECAY 2 + ONS(λ 2⁻²⁰), not yet run together (about −820 if the parts add). ONS needs a guard first: its losses at λ 2⁻¹⁶ (+19 MB) show the inverse-Hessian inflation can run away.
