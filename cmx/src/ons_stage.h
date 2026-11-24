@@ -51,6 +51,9 @@
 #ifndef XZ_ONS_FEAT     // inputs: 0 the six below; 1 + p before the semantic-cache end stages; 2 + the 22 layer-0
 #define XZ_ONS_FEAT 0     // mixer outputs of the BITLSTM's stage-1 row; 3 + that whole row (path and cache columns)
 #endif
+#ifndef XZ_ONS_CTX      // weight sets: 0 bit position x skip (16); 1 also x 4 bands of |input logit| (64)
+#define XZ_ONS_CTX 0
+#endif
 #ifndef XZ_ONS_GUARD    // 0 off; else the guard's loss memory is 2^GUARD bits (per set)
 #define XZ_ONS_GUARD 12
 #endif
@@ -58,7 +61,7 @@
 namespace ons_stage {
 
 constexpr int kD = XZ_ONS_FEAT == 0 ? 6 : (XZ_ONS_FEAT == 1 ? 7 : (XZ_ONS_FEAT == 2 ? 29 : 48));
-constexpr int kSets = 16;   // bit position x skip
+constexpr int kSets = XZ_ONS_CTX ? 64 : 16;   // bit position x skip (x |logit| band)
 constexpr double kZCap = 7.5;
 constexpr double kWCap = 4.0;
 
@@ -109,6 +112,10 @@ struct Stage {
     const double x0 = std::log(q / (1.0 - q));
     if (!(x0 > -kZCap && x0 < kZCap)) return p32;
     cur = (bp & 7) * 2 + (skip ? 1 : 0);
+    if (XZ_ONS_CTX) {
+      const double a = x0 < 0.0 ? -x0 : x0;
+      cur = cur * 4 + (a < 1.0 ? 0 : (a < 2.5 ? 1 : (a < 4.5 ? 2 : 3)));
+    }
     x[0] = x0;
     x[1] = St16(p_pre);
     x[2] = St16(p_head);
