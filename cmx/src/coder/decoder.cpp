@@ -35,6 +35,9 @@ int Decoder::Decode() {
     }
   }
   unsigned int p = Discretize(p_->Predict());
+#if XZ_ONS
+  const unsigned int ons_pre = p;
+#endif
   int bb_bitl = 0;
   if (bit_head::Enabled()
       && !bit_head::AuxOff()
@@ -58,11 +61,16 @@ int Decoder::Decode() {
     }
 #endif
   }
-  const unsigned int xmid = floor_stage::Mid(x1_, x2_, p_->SemCorrect(floor_.P32(p,
+  uint32_t p32 = p_->SemCorrect(floor_.P32(p,
       p_->bitl_override_,
       p_->AdepthSkipped() ? 1 : 0,
       bb_bitl, p_->bb_z_, p_->bitl_m1raw_, bit_head::MetaOff() ? 1 : 0,
-      (31 - __builtin_clz(p_->BbBitCtx() | 1u)) & 7)));
+      (31 - __builtin_clz(p_->BbBitCtx() | 1u)) & 7));
+#if XZ_ONS
+  p32 = ons_.P32(p32, ons_pre, p, p_->bitl_m1raw_, p_->bb_z_, p_->AdepthSkipped() ? 1 : 0,
+                 (31 - __builtin_clz(p_->BbBitCtx() | 1u)) & 7, p_->bitl_override_);
+#endif
+  const unsigned int xmid = floor_stage::Mid(x1_, x2_, p32);
   int bit = 0;
   if (x_ <= xmid) {
     bit = 1;
@@ -71,6 +79,9 @@ int Decoder::Decode() {
     x1_ = xmid + 1;
   }
   floor_.Update(bit);
+#if XZ_ONS
+  ons_.Update(bit);
+#endif
   p_->SemLearn(bit);
   if (bit_head::Enabled()
       && !bit_head::AuxOff()

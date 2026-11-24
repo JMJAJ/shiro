@@ -8,6 +8,7 @@
 #include "../char_rate.h"
 #include "../run_mode.h"
 #include "../floor_stage.h"
+#include "../ons_stage.h"
 #include "../port_cfg.h"
 
 class Encoder {
@@ -41,5 +42,8 @@ class Encoder {
   unsigned int x1_, x2_;
   Predictor* p_;
   floor_stage::Stage floor_;
+#if XZ_ONS
+  ons_stage::Stage ons_;   // xzip research stage (src/ons_stage.h)
+#endif
 };
 #endif
