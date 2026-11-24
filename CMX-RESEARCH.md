@@ -31,6 +31,10 @@ gh run download <id> -n summary        # table.md + all.jsonl -> results/gha/cmx
 | ex-girlfriend R,12 cache + FW4 + BITL0 (narrow geometry) | 12.0 GB | −1,943 |
 | extra cache layer: 10 −635 · 11 −556 · 13 −525 · 12 −444 · 15 +210 · R,12,9 +147 | | |
 | on the wide geometry: gap 256 −152 · store 985 −149 · G=7 −21 · QPE 999 −5 · TE 14/28 +270 | | |
+| on the best config (batches 4–5, Δ vs best): `CMX_ROWDECAY=2` −188 · FLIP 11 −177 · gap 512 −85 · gap 128 −50 · G=7 −30 · ROWDECAY=1 −27 · NLOG 25 ±0 · R,11 −2 · R,12 +68 · R,9 +297 | ≤14.9 GB | |
+| attention window past the trained 2048 (on best): 2560 +10,431 · 3072 +46,142 · 4096 +51,368 | | dead |
+| fxcm context maps ×2 / ×4 (`XZ_CM_MUL`, on defaults): −398 / −542 | +0.7 / +4.9 GB | |
+| M=47 FLIP=11, and best + CM_MUL=2: the runner died after ~3.7 h without uploading, which looks like running out of memory (>~15 GB) | | |
 
 Raw data is in `results/gha/cmx-*.jsonl`.
 
@@ -40,10 +44,10 @@ Ranked by (expected gain × chance) ÷ cost. The status column tracks each item.
 
 | # | Idea | Source / basis | Status |
 |---|---|---|---|
-| 1 | Attention window beyond the trained 2048 (2560/3072/4096) at inference | neif-2.0 README §6: 2560 = −13 KB at 39 % on neif-1.0 | screening (batch 5) |
-| 2 | Per-row mixer LR decay (`CMX_ROWDECAY=1/2`) | cmix-wolf-2 PRL lever (part of its −28.7 KB) | screening (batch 5) |
-| 3 | Medium geometry × cache layer × gap × ring sizes around the best config | batches 1–3 | screening (batch 4) |
-| 4 | Enlarged fxcm text-model tables (memory headroom vs Hutter's 10 GB) | ex-girlfriend 1.0 (not adopted by neif-2.0); lex-transformer: maps halved = +0.11 % | todo: find the table-size constants |
+| 1 | Attention window beyond the trained 2048 (2560/3072/4096) at inference | neif-2.0 README §6: 2560 = −13 KB at 39 % on neif-1.0 | dead: +10 KB to +51 KB at 30 MB |
+| 2 | Per-row mixer LR decay (`CMX_ROWDECAY=1/2`) | cmix-wolf-2 PRL lever (part of its −28.7 KB) | ROWDECAY=2 −188; stacking in batches 7–8 |
+| 3 | Medium geometry × cache layer × gap × ring sizes around the best config | batches 1–3 | done (batch 4); FLIP 11 −177 |
+| 4 | Enlarged fxcm text-model tables (memory headroom vs Hutter's 10 GB) | ex-girlfriend 1.0 (not adopted by neif-2.0); lex-transformer: maps halved = +0.11 % | `XZ_CM_MUL` ×2 −398, ×4 −542 on defaults; on the 12 GB wide config in batch 8 |
 | 5 | PPMd memory up (+2.2 GB = −0.24 % in lex-transformer) | cmix-lex-transformer writeup | todo |
 | 6 | Port cmix-views' models: recurrent word-history state (32-d, ≤16 transitions), extra prediction views with bounded calibration, word-residual correction, cubic disagreement interactions, double-indirect contexts | cmix-views −248 KB vs beehive (part of that is ex-girlfriend 1.0 work we already have) | todo: big port; diff vs beehive is 2,354 lines |
 | 7 | RATA-CMIX models: GrammarMatch, MorphologyMatch, MATCHTRUST (8-bit match-outcome history as StateMap context), SPECIALIST (context-gated corrector after SSE) | RATA-CMIX (fx2-cmix-T base, different lineage) | todo: read source |
@@ -57,3 +61,5 @@ Ranked by (expected gain × chance) ÷ cost. The status column tracks each item.
 ## Log
 
 - 2026-11-23: imported ex-girlfriend 2.0; CI build 9 min; stream reproduced bit-exact; batches 1–3 done (table above); batches 4–5 running.
+- 2026-11-24: batches 4–6 done. The best config sits at 14.9 GB and leaves no room on a 16 GB runner, so the overnight batches split. Batch 7 (30 MB, run 45307430312): stacks of FLIP 11, ROWDECAY 2, gap 512 and 16 fast-weight blocks, plus 13 of the screened-and-shelved upstream knobs (SEMIN, SEMTOP, MATCH_AGE, FXLS, ADEPTH_TAU, FX_KA, FWK_MUL, SEM_KCEN0) re-tested on the best config. Batch 8 (36 MB, run 45307436047), on the 12 GB wide config: CM_MUL 2, 2^26 key ring, ROWDECAY, mixer-row and skip knobs, plus the best config itself at 36 MB as a memory test. 36 MB runs past the 2^25 key ring, so this is where NLOG 26 should first show a gain.
+- PPMd is built as order 25 with a 14,000 MB pool (`Predictor::AddPPMD`). The pool grows over the full file, so the RSS figures from the screens understate the full-run peak. Check this before picking the release config.

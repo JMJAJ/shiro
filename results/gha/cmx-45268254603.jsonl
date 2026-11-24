@@ -1,0 +1,3 @@
+{"i": 0, "ref": "cmx", "env": "", "mb": 30, "defs": "", "exit": 0, "in": 30000000, "out": 4940203, "secs": 9075.1, "rss_mb": 9984, "rev": "f6cc186", "cpu": "Intel(R) Xeon(R) 6975P-C"}
+{"i": 1, "ref": "cmx", "env": "", "mb": 30, "defs": "-DXZ_CM_MUL=2", "exit": 0, "in": 30000000, "out": 4939805, "secs": 6928.05, "rss_mb": 10645, "rev": "f6cc186", "cpu": "AMD EPYC 9V45 96-Core Processor"}
+{"i": 2, "ref": "cmx", "env": "", "mb": 30, "defs": "-DXZ_CM_MUL=4", "exit": 0, "in": 30000000, "out": 4939661, "secs": 10174.59, "rss_mb": 14870, "rev": "f6cc186", "cpu": "Intel(R) Xeon(R) 6975P-C"}
