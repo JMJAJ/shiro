@@ -48,6 +48,32 @@ Rule: with the best ONS setting on BEST2, add one at a time `CMX_MATCH_AGE=1`, `
 Filled in: best = BEST5, runner-up = BEST4 + MA1 + KA900 (4,934,209), plus one untested stack BEST5 + MA1 + KA900. 40 MB run: #0 BEST5, #1 BEST4 + MA1 + KA900, #2 BEST5 + MA1 + KA900 (BEST2 at 40 MB is known: 6,537,921). 20 MB run: #0 BEST2, #1 BEST5, #2 BEST4 + MA1 + KA900. 30 MB bytes for all three are known, so no 30 MB reruns. 40 MB, not 42 MB: batch 12's 40 MB jobs took up to 20,198 s (337 min) against the 355 min cap; RSS at 40 MB peaked at 14.9 GB. 6 jobs. When done: write the summary below for the user and stop.
 Rule: the single best stack from batches 12–14, plus BEST2, plus the runner-up stack, each at 42 MB. There is no stream-offset knob, so instead also run each at 20 MB and 30 MB to fit the gain-versus-length curve. That's 9 runs, then stop and leave a summary in `CMX-RESEARCH.md` for the user: the predicted full-file gain, with the warning that screens under-read gains that build up over the file.
 
+## Port track (from 2026-11-25): ideas from other top-10 entries
+
+The user asked to prioritise combining mechanisms from other entries over more configuration sweeps. Sources are cloned read-only under `../ports/`. Each port sits behind its own build define on `cmx`, is screened as an add-on to BEST5 (and to BEST2, to see whether it overlaps with ONS), and only winners get a second round. wolf-2 has nothing new: its E1 and E3b levers are already in neif-2.0. The overlap question is the research value: a port that wins on BEST2 but not on BEST5 is information ONS already extracts.
+
+Defines (cmx ≥ 17ec53d):
+- `XZ_WRES=1` — cmix-views' word-context residual (`src/wres_stage.h`). `XZ_WRES_LR0` is the starting gate log-odds ×100 (cmix-views 0; on synthetic data −200 or −400 cut the cost on clean input from +0.065 % to +0.012 % / +0.002 %). `XZ_WRES_W` is the number of key words, 1–3. `XZ_WRES_CELLLOG` is the cell cap, default 20.
+- `XZ_WGRU=1` — cmix-views' recurrent word history (`src/word_gru.h` inside `word_label.cpp`, plus `src/wgru_stage.h`). About +5–10 % time.
+- `XZ_MTRUST=1|2` — RATA's MATCHTRUST (`models/fxcmv1.cpp`). 1 = 4 history bits in the match length context; 2 = RATA's 4th StateMap (+2 fxcm outputs, +16 input lanes).
+
+### P1 — word residual (30 MB) — running, run 45681545454
+#0 BEST5+WRES · #1 LR0 −200 · #2 LR0 −400 · #3 LR0 −200 W2 · #4 LR0 −200 W1 · #5 BEST2+WRES · #6 BEST2+WRES LR0 −200 · #7 BEST5 LR0 −200 CELLLOG 21. Compare against BEST5 4,934,051 and BEST2 4,936,732.
+
+### P2 — word GRU (30 MB) — running, run 45682779594
+#0 BEST5+WGRU · #1 BEST2+WGRU · #2 BEST5+WGRU+WRES(LR0 −200) · #3 BEST2+WGRU+WRES.
+
+### P3 — MATCHTRUST (30 MB) — running, run 45683305363
+#0 BEST5+MTRUST1 · #1 BEST5+MTRUST2 · #2 BEST2+MTRUST1 · #3 BEST2+MTRUST2.
+
+### P4 — combination round (30 MB) — staged, after P1–P3
+Rule: the winners are each port's best setting at least 150 B under BEST5. Run every pair and the triple of winners on BEST5, each winner's best setting with one step either side (for example LR0 ±200, or MTRUST 1 vs 2 if both won), and each winner on BEST5 + MA1 + KA900. At most 20 jobs. If nothing beats BEST5 by 150 B, run nothing, and say in `CMX-RESEARCH.md` that the port overlaps with ONS.
+
+### P5 — the port stack at length (40 MB) — staged, after P4
+Rule: the best P4 stack and BEST5 at 40 MB (BEST5's 40 MB number may already be known from batch 15), plus the best stack at 20 MB. That's 3 jobs. Then write a port-track summary in `CMX-RESEARCH.md`: each port's gain on BEST2 vs on BEST5 (overlap with ONS), the stack, and its growth with length.
+
+Ports that still need code (the scheduled runner skips them): cmix-views' view experts (4 online output heads on sparse transformer-block activations, `tf1/opt/view_expert.h`), RATA's MorphologyMatch, Scr2Match and CausalDonor, and cmix-lex-transformer's larger PPMd (memory).
+
 ## Not for this queue (needs the user)
 - An encode → decode round trip of ONS (`-e` / `-d` on a few MB) before any release use. The screens only run the encoder.
 - The full-file PPMd pool growth (14,000 MB cap) against the 16 GB box.
