@@ -65,6 +65,7 @@
 #ifndef WORD_LABEL_H_
 #define WORD_LABEL_H_
 #include "port_cfg.h"
+#include <cstdint>
 
 namespace word_label {
 
