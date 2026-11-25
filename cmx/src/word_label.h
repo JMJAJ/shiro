@@ -98,6 +98,11 @@ void Perceive(State* s, int bit);
 #if PORT_CMX_MEAS
 // research WL-MIXGRAD (src/cmx_meas.h): Perceive with the node gradient g + extra (extra = 0: Perceive exactly)
 void PerceiveG(State* s, int bit, float extra);
+// xzip research accessors (src/wres_stage.h): is this bit a codeword bit the model predicts; the last `words` (<= 3)
+// completed words, 16 bits each; the exact trie node of this bit within its codeword
+bool ListenLive(State* s);
+uint64_t ExactContext(State* s, int words);
+uint32_t ExactCodeNode(State* s);
 #endif
 
 }  // namespace word_label

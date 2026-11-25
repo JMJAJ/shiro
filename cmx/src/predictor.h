@@ -73,6 +73,7 @@ class Predictor {
   bool AdepthSkipped() const { return adepth_.skip; }
   int Tf1ZwangByte() const { return tf1_engine_ ? tf1_engine_->ZwangByte() : -1; }
   void WordlblBlockEnde() { wordlbl_ = word_label::Neu(wordlbl_); }
+  word_label::State* WordLbl() const { return wordlbl_; }   // xzip research (src/wres_stage.h)
   void MetalrBlockEnde();
   void PpmdWaermen();
   void SemByteStart(int pb);

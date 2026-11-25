@@ -8,6 +8,7 @@
 #include "../run_mode.h"
 #include "../floor_stage.h"
 #include "../ons_stage.h"
+#include "../wres_stage.h"
 
 class Decoder {
  public:
@@ -30,6 +31,9 @@ class Decoder {
   floor_stage::Stage floor_;
 #if XZ_ONS
   ons_stage::Stage ons_;   // xzip research stage (src/ons_stage.h)
+#endif
+#if XZ_WRES
+  wres_stage::Stage wres_;   // xzip research stage (src/wres_stage.h, after cmix-views)
 #endif
 };
 

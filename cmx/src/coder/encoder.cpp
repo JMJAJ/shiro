@@ -78,6 +78,11 @@ void Encoder::Encode(int bit) {
                  (31 - __builtin_clz(p_->BbBitCtx() | 1u)) & 7, p_->bitl_override_,
                  p_floor, p_->bitl_stage1_, p_->bitl_n_stage1_);
 #endif
+#if XZ_WRES
+  p32 = wres_.P32(p32, bb_bitl && !p_->AdepthSkipped() && !p_->bitl_override_,
+                  word_label::ListenLive(p_->WordLbl()), word_label::ExactContext(p_->WordLbl(), XZ_WRES_W),
+                  word_label::ExactCodeNode(p_->WordLbl()));
+#endif
   const unsigned int xmid = floor_stage::Mid(x1_, x2_, p32);
   if (bit) {
     x2_ = xmid;
@@ -88,6 +93,9 @@ void Encoder::Encode(int bit) {
   floor_.Update(bit);
 #if XZ_ONS
   ons_.Update(bit);
+#endif
+#if XZ_WRES
+  wres_.Update(bit);
 #endif
   p_->SemLearn(bit);
   if (bit_head::Enabled()

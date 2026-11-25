@@ -331,4 +331,18 @@ void Perceive(State* s, int bit) {
   ByteDone(s, byte);
 }
 
+// xzip research accessors (read only; after cmix-views' word_label.cpp, kzwrx, GPL-3): the per-bit state of the
+// codeword prediction, read by src/wres_stage.h between Forward() and Perceive()
+bool ListenLive(State* s) { return s->live; }
+uint64_t ExactContext(State* s, int words) {
+  uint64_t c = 0;
+  for (int i = 0; i < words && i < 3; ++i) c |= (uint64_t)(s->ring[i] & 0xFFFFu) << (16 * i);
+  return c;
+}
+uint32_t ExactCodeNode(State* s) {
+  if (s->expecting == 0) return s->nodeix;
+  if (s->expecting == 1) return (1u << 24) | (s->pfx0 << 8) | s->nodeix;
+  return (2u << 24) | (s->pfx0 << 16) | (s->pfx1 << 8) | s->nodeix;
+}
+
 }  // namespace word_label
