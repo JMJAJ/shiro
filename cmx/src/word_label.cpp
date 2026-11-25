@@ -13,6 +13,14 @@
 
 #include "word_label.h"
 #include "page_registry.h"
+#include "wgru_feature.h"
+#if XZ_WGRU
+#include "word_gru.h"   // xzip research: cmix-views' recurrent word history
+#endif
+namespace word_gru { double feature = 0.; bool feature_live = false; }
+#if XZ_WGRU
+namespace { word_gru::Model* g_gru = nullptr; }   // one per live State (Create / Neu), as cmix-views
+#endif
 
 #include <cmath>
 #include <cstdint>
@@ -150,6 +158,9 @@ __attribute__((noinline)) void TokenEnde(State* s) {
 }
 
 inline void ParseAbort(State* s) {
+#if XZ_WGRU
+  if (g_gru) g_gru->Cancel();
+#endif
   // Invalid continuation: treat the bytes as literals and never reach token
   // end; discard the aborted token gradient and reset.  No abort occurred on
   // the measured inputs, so this is armour, not a hot path.
@@ -176,6 +187,9 @@ void TokenDone(State* s, uint32_t r) {
   }
   memmove(&s->ring[1], &s->ring[0], (kCtx - 1) * sizeof(s->ring[0]));
   s->ring[0] = (uint32_t)ri;
+#if XZ_WGRU
+  if (g_gru) g_gru->Finish(s->e1 + ri * kD);
+#endif
   TokenEnde(s);   // also clears expecting, which nothing above reads
 }
 
@@ -255,6 +269,10 @@ State* Create() {
   for (int i = 0; i < kCtx; ++i) { s->lampow[i] = w; w *= kLambda; }
   s->breg = 1;
   s->nodeix = 1;
+#if XZ_WGRU
+  delete g_gru;
+  g_gru = new word_gru::Model();
+#endif
   return s;
 }
 
@@ -264,6 +282,10 @@ State* Neu(State* alt) {
 }
 
 float Forward(State* s) {
+  word_gru::ClearFeature();
+#if XZ_WGRU
+  if (g_gru) g_gru->Abstain();
+#endif
   s->live = false;
   if (s->breg == 1) return 0.0f;       // the MSB: codeword / literal flag
   if (s->escape_next) return 0.0f;     // the escaped literal byte
@@ -279,12 +301,18 @@ float Forward(State* s) {
   s->nid = nid;
   s->plbl = SquashF(zl);
   s->live = true;
+#if XZ_WGRU
+  if (g_gru) g_gru->Predict(nid, zl);
+#endif
   return zl;
 }
 
 #if PORT_CMX_MEAS
 void PerceiveG(State* s, int bit, float extra) {
   const int y = bit & 1;
+#if XZ_WGRU
+  if (g_gru) g_gru->Observe(y);
+#endif
   if (s->live) {
     const float g = (s->plbl - (float)y) + extra;
     float* nv = s->nd + (size_t)s->nid * kD;
@@ -309,6 +337,9 @@ void PerceiveG(State* s, int bit, float extra) {
 
 void Perceive(State* s, int bit) {
   const int y = bit & 1;
+#if XZ_WGRU
+  if (g_gru) g_gru->Observe(y);
+#endif
   if (s->live) {
     const float g = s->plbl - (float)y;
     float* nv = s->nd + (size_t)s->nid * kD;

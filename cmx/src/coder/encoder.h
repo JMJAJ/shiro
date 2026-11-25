@@ -10,6 +10,7 @@
 #include "../floor_stage.h"
 #include "../ons_stage.h"
 #include "../wres_stage.h"
+#include "../wgru_stage.h"
 #include "../port_cfg.h"
 
 class Encoder {
@@ -48,6 +49,9 @@ class Encoder {
 #endif
 #if XZ_WRES
   wres_stage::Stage wres_;   // xzip research stage (src/wres_stage.h, after cmix-views)
+#endif
+#if XZ_WGRU
+  wgru_stage::Stage wgru_;   // xzip research stage (src/wgru_stage.h, after cmix-views)
 #endif
 };
 #endif
