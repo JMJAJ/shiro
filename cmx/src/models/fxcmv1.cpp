@@ -30,6 +30,15 @@
 #define XZ_CM_MUL 1
 #endif
 #define XZ_CMS(x) (((x) >= 4096 * 4096) ? (x) * XZ_CM_MUL : (x))
+// xzip build override: XZ_MTRUST, RATA-CMIX's MATCHTRUST (Dharmesh Patel, from trophy-v93; github.com/Dharmesh2015/
+// RATA-CMIX, GPL-3): an 8-bit shift register of recent match outcomes (1 bit per byte with a non-delta match: was the
+// best candidate's expected byte right), the evidence MatchModel2 destroys when it drops a mispredicting candidate.
+// 1 = its last 4 bits join the length context ctx[0] (StateMap 2^9 -> 2^13; no new model outputs); 2 = as RATA, a 4th
+// StateMap (2^18) on ((history << 1 | expected bit) << 8 | c1): two more fxcm outputs and mixer inputs.
+#ifndef XZ_MTRUST
+#define XZ_MTRUST 0
+#endif
+#define XZ_MT_N (XZ_MTRUST == 2 ? 1 : 0)
 #include "../meld.h"
 
 #include "fxcmv1.h"
@@ -151,7 +160,7 @@ typedef unsigned long long int U64;
 typedef __m128i XMM;
 typedef __m256i YMM;
 
-const int num_models = 531 + 0;
+const int num_models = 531 + 0 + 2 * XZ_MT_N;
 
 static_assert(((((num_models) + 15) & -16) & 15) == 0 || !1,
     "the rounded-up mxA2 row width is not a multiple of 16"
@@ -314,7 +323,7 @@ struct BlockData {
     }
 };
 
-BlockData<544 + 0 + 0> x; //maintains current global data block
+BlockData<544 + 0 + 0 + 16 * XZ_MT_N> x; //maintains current global data block
 #if PORT_CMX_MEAS
 // ---- research CMX_CM_TICKS=2 / CMX_VALTEL (src/cmx_meas.h, CM census phase 2a; Claude Opus 5.5, 2026-11-08) --------
 // A site is one mix() call or mixer stage of fxcm.  FxBeg() / FxEnd(id) around it give its cycles (CMX_CM_TICKS=2)
@@ -3787,7 +3796,7 @@ U32 wt3b=0,wt3cxt=0,wt3cxtW=0,wt3cxtW1=0,wt4cxtW=0,wt4cxtW1=0;
 
 int pr; // Our most important variable - final prediction
 
-StateMap1 smA[3 + 0];
+StateMap1 smA[3 + 0 + XZ_MT_N];
 SmallStationaryContextMap scmA[3];
 
 Mixer1 mxA[17];
@@ -3866,12 +3875,15 @@ Mix mmmO[4];
 
     // Match
 #if PORT_CMX_MEAS
-    smA[0].Init(cmx_meas::g_match_age == 1 ? (1<<10) : (1<<9),1023);   // research CMX_MATCH_AGE=1: + the far bit
+    smA[0].Init(XZ_MTRUST == 1 ? (1<<14) : (cmx_meas::g_match_age == 1 ? (1<<10) : (1<<9)),1023);   // research CMX_MATCH_AGE=1: + the far bit; XZ_MTRUST=1: + 4 history bits
 #else
-    smA[0].Init((1<<9),1023);
+    smA[0].Init(XZ_MTRUST == 1 ? (1<<14) : (1<<9),1023);
 #endif
     smA[1].Init((1<<19),1023);
     smA[2].Init((1<<16),1023);
+#if XZ_MTRUST == 2
+    smA[3].Init((1<<18),1023);
+#endif
 
     for (int i=0;i<4;i++) mmmO[i].Init(256);
 
@@ -3928,7 +3940,7 @@ Mix mmmO[4];
 
     rcmA[0].Init(1*4096*4096,6);
 
-    x.mxInputs1.ncount=544 + 0 + 0;
+    x.mxInputs1.ncount=544 + 0 + 0 + 16 * XZ_MT_N;
     x.mxInputs2.ncount=32;
     x.mxInputs4.ncount=16;
 
@@ -4029,6 +4041,9 @@ void PredictorFree() {
     smA[0].Free();
     smA[1].Free();
     smA[2].Free();
+#if XZ_MTRUST == 2
+    smA[3].Free();
+#endif
     for (int i=0;i<4;i++) mmmO[i].Free();
     for (int i=0;i<3;i++) scmA[i].Free();
     maps1.Free();
@@ -4224,7 +4239,10 @@ U32 numberOfActiveCandidates=0;
 HashElementForMatchPositions *mhashtable,*mhptr;
 U32 mhashtablemask;
 
-const int nST=3 + 0;
+const int nST=3 + 0 + XZ_MT_N;
+#if XZ_MTRUST
+U8 mtHist = 0, mtPrevExpected = 0, mtPrevActive = 0;   // XZ_MTRUST
+#endif
 U32 ctx[nST];
 
 bool isMMatch(const U32 pos, const int MINLEN) {
@@ -4338,6 +4356,16 @@ int MatchModel2mix() {
   }
 #endif
   const int expectedBit = length != 0 ? (expectedByte >> (7 - x.bpos)) & 1 : 0;
+#if XZ_MTRUST
+  if (x.bpos == 0) {   // the previous byte's outcome (c1 = the byte just completed), then this byte's candidate
+    if (mtPrevActive) mtHist = (U8)((mtHist << 1) | (mtPrevExpected == (U8)c1 ? 1u : 0u));
+    mtPrevActive = (length != 0 && !isInDeltaMode) ? 1 : 0;
+    mtPrevExpected = expectedByte;
+  }
+#if XZ_MTRUST == 2
+  ctx[3] = length != 0 ? (((((U32)mtHist << 1) | (U32)expectedBit) << 8) | (U32)c1) + 1 : 0;
+#endif
+#endif
 
   U32 denselength = 0; // 0..27
   if (length != 0) {
@@ -4355,6 +4383,9 @@ int MatchModel2mix() {
     }
 #endif
     ctx[0] = (denselength << 4) | (expectedBit << 3) | x.bpos; // 1..28*2*8
+#if XZ_MTRUST == 1
+    ctx[0] |= (U32)(mtHist & 15u) << 10;   // above CMX_MATCH_AGE's bit 9
+#endif
     ctx[1] = ((expectedByte << 11) | (x.bpos << 8) | c1) ;//+ 1;
     const int sign = 2 * expectedBit - 1;
     x.mxInputs1.add(sign * int(length << 5));
@@ -6468,7 +6499,7 @@ inline void Predictor::predict_half() {
     dcsm1.Free();
     dcsm2.Free();
     dcsmN.Free();
-    for (int i=0;i<3+0;i++) smA[i].Free();
+    for (int i=0;i<3+0+XZ_MT_N;i++) smA[i].Free();
     for (int i=0;i<3;i++) scmA[i].Free();
     for (int i=0;i<4;i++)  mmmO[i].Free();
     for (int i=0;i<17;i++) mxA[i].Free();
