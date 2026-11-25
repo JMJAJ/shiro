@@ -14,6 +14,7 @@ Each batch is a `;`-separated list for `gh workflow run cmx.yml -f mode=screen -
 - `BEST2` = `BEST` with `-DXZ_SEM_FLIP=11` and env `CMX_ROWDECAY=2`. At 30 MB it codes to **4,936,732** (−270).
 - `BEST3` = `BEST2` with `-DXZ_ONS=1 -DXZ_ONS_LAMLOG=20 -DXZ_ONS_FEAT=3 -DXZ_ONS_EPS=64000` (ONS v2, cmx edf91ac). At 30 MB it codes to **4,934,615** (−2,117 vs BEST2).
 - `BEST4` = `BEST3` with `-DXZ_ONS_DMAX=4096 -DXZ_ONS_GUARD=16` (batch 13). At 30 MB it codes to **4,934,288** (−2,444 vs BEST2).
+- `BEST5` = `BEST4` with `-DXZ_ONS_ETA=1400` (batch 14). At 30 MB it codes to **4,934,051** (−2,681 vs BEST2).
 - `WIDEC` = `cmx -DXZ_SEM_M=63 -DXZ_SEM_FLIP=15 -DXZ_SEM_PRE=512 -DXZ_SEM_DEDUPLOG=10 -DXZ_SEM_GAP=256 -DXZ_SEM_SPE3=985 -DXZ_SEM_NLOG=25 -DXZ_SEM_WHLOG=26 -DXZ_CM_MUL=2 <defs> CMX_FW_BLOCKS=4 BITL_SEQ=0 <env>`. Uses 14.5 GB; at 36 MB it codes to 5,938,723.
 - `ONS(...)` = `-DXZ_ONS=1` plus the listed `-DXZ_ONS_*` defines, all on ONS v2 (cmx ≥ 36c9b6c+). `L` = `XZ_ONS_LAMLOG` (λ = 1−2⁻ᴸ), `F` = `XZ_ONS_FEAT`, `C` = `XZ_ONS_CTX`, `E` = `XZ_ONS_ETA`, `G` = `XZ_ONS_GUARD`. ONS v1 (cmx 1c13702) got −549 at L20, and coded the 30 MB to 24–39 MB at L13 and L16. The NaN and inf from fast-math are fixed in v2.
 - Timing: 30 MB takes 1.8–3.8 h per job; 42 MB at most about 5.3 h. A job is capped at 355 min, so never screen more than 42 MB.
@@ -38,11 +39,13 @@ Result (vs anchor BEST3 = 4,934,615): **DMAX 4096 + G16 = 4,934,288 (−327; −
 Filled in around F3 EPS64000 L20 on BEST2 (#0 rerun as the anchor): L19/21, ETA 700/1400, DMAX 512/2048, G10/14, EPS 32k/128k/256k (16k is the known 4,935,392), C1, F2 + C1 + EPS64k, DMAX 4096, G16, DMAX 4096 + G16, DMAX 0, F0 + EPS64k, F0 + G16.
 Rule: around the best ONS setting `(L, F, C, E)`, run L ±1, E ×0.7/×1.4, DMAX ½/2, G 10/14, EPS ¼/4, and C flipped. If F3 won, also try F2 with C1. That's 20 runs.
 
-### 14 — ONS × the knobs that lost on their own (30 MB) — running, run 45611575846
+### 14 — ONS × the knobs that lost on their own (30 MB) — done, run 45611575846
+Result (vs BEST4 = 4,934,288): **ETA 1400 = 4,934,051 (−237; −2,681 vs BEST2) = BEST5**. MA1 + KA900 −79, KA900 −20, G18 +1, G20 +14, SEMTOP 3 +31, GAP 512 +42, FWK 0.7 +42, R,11 +51, MA1 +77, R,12 +135. G18 + ETA 1400: runner died at ~1.8 h (likely out of memory). Only ETA 1400 and the MA1 + KA900 pair survive under ONS.
 Filled in on BEST4 (no anchor rerun; compare to 4,934,288): #0 MA1, #1 KA900, #2 MA1 + KA900, #3 SEMTOP 3, #4 GAP 512, #5 FWK_MUL 0.7, #6 R,11, #7 R,12. Extra grid points from batch 13's trend: #8 ETA 1400, #9 G18, #10 G20, #11 G18 + ETA 1400. 12 jobs.
 Rule: with the best ONS setting on BEST2, add one at a time `CMX_MATCH_AGE=1`, `CMX_FX_KA=900`, `CMX_SEMTOP=3`, `-DXZ_SEM_GAP=512`, `CMX_FWK_MUL=0.7`, and `CMX_SEMKEYS=R,11` / `R,12`. Pairs are only for winners from batch 10. Purpose: a final stage can turn a slightly worse but differently-wrong upstream into a gain.
 
-### 15 — release candidate at 42 MB, three seeds of the stream offset — staged, after 12 and 14
+### 15 — release candidate at 40 MB, three seeds of the stream offset — running, runs 45672750456 (40 MB) and 45672775112 (20 MB)
+Filled in: best = BEST5, runner-up = BEST4 + MA1 + KA900 (4,934,209), plus one untested stack BEST5 + MA1 + KA900. 40 MB run: #0 BEST5, #1 BEST4 + MA1 + KA900, #2 BEST5 + MA1 + KA900 (BEST2 at 40 MB is known: 6,537,921). 20 MB run: #0 BEST2, #1 BEST5, #2 BEST4 + MA1 + KA900. 30 MB bytes for all three are known, so no 30 MB reruns. 40 MB, not 42 MB: batch 12's 40 MB jobs took up to 20,198 s (337 min) against the 355 min cap; RSS at 40 MB peaked at 14.9 GB. 6 jobs. When done: write the summary below for the user and stop.
 Rule: the single best stack from batches 12–14, plus BEST2, plus the runner-up stack, each at 42 MB. There is no stream-offset knob, so instead also run each at 20 MB and 30 MB to fit the gain-versus-length curve. That's 9 runs, then stop and leave a summary in `CMX-RESEARCH.md` for the user: the predicted full-file gain, with the warning that screens under-read gains that build up over the file.
 
 ## Not for this queue (needs the user)
