@@ -44,7 +44,8 @@ Result (vs BEST4 = 4,934,288): **ETA 1400 = 4,934,051 (−237; −2,681 vs BEST2
 Filled in on BEST4 (no anchor rerun; compare to 4,934,288): #0 MA1, #1 KA900, #2 MA1 + KA900, #3 SEMTOP 3, #4 GAP 512, #5 FWK_MUL 0.7, #6 R,11, #7 R,12. Extra grid points from batch 13's trend: #8 ETA 1400, #9 G18, #10 G20, #11 G18 + ETA 1400. 12 jobs.
 Rule: with the best ONS setting on BEST2, add one at a time `CMX_MATCH_AGE=1`, `CMX_FX_KA=900`, `CMX_SEMTOP=3`, `-DXZ_SEM_GAP=512`, `CMX_FWK_MUL=0.7`, and `CMX_SEMKEYS=R,11` / `R,12`. Pairs are only for winners from batch 10. Purpose: a final stage can turn a slightly worse but differently-wrong upstream into a gain.
 
-### 15 — release candidate at 40 MB, three seeds of the stream offset — running, runs 45672750456 (40 MB) and 45672775112 (20 MB)
+### 15 — release candidate at 40 MB, three seeds of the stream offset — done, runs 45672750456 (40 MB) and 45672775112 (20 MB)
+Result (vs BEST2): BEST5 at 20 / 30 / 40 MB = −1,848 / −2,681 / −2,985 (0.055 / 0.054 / 0.046 % of BEST2's bytes). At 40 MB: BEST5 + MA1 + KA900 = 6,534,819 (−3,102, best), BEST5 6,534,936, BEST4 + MA1 + KA900 6,535,081 (−2,840). At 20 MB BEST4 + MA1 + KA900 −1,707. Summary for the user is in `CMX-RESEARCH.md`.
 Filled in: best = BEST5, runner-up = BEST4 + MA1 + KA900 (4,934,209), plus one untested stack BEST5 + MA1 + KA900. 40 MB run: #0 BEST5, #1 BEST4 + MA1 + KA900, #2 BEST5 + MA1 + KA900 (BEST2 at 40 MB is known: 6,537,921). 20 MB run: #0 BEST2, #1 BEST5, #2 BEST4 + MA1 + KA900. 30 MB bytes for all three are known, so no 30 MB reruns. 40 MB, not 42 MB: batch 12's 40 MB jobs took up to 20,198 s (337 min) against the 355 min cap; RSS at 40 MB peaked at 14.9 GB. 6 jobs. When done: write the summary below for the user and stop.
 Rule: the single best stack from batches 12–14, plus BEST2, plus the runner-up stack, each at 42 MB. There is no stream-offset knob, so instead also run each at 20 MB and 30 MB to fit the gain-versus-length curve. That's 9 runs, then stop and leave a summary in `CMX-RESEARCH.md` for the user: the predicted full-file gain, with the warning that screens under-read gains that build up over the file.
 
@@ -57,19 +58,24 @@ Defines (cmx ≥ 17ec53d):
 - `XZ_WGRU=1` — cmix-views' recurrent word history (`src/word_gru.h` inside `word_label.cpp`, plus `src/wgru_stage.h`). About +5–10 % time.
 - `XZ_MTRUST=1|2` — RATA's MATCHTRUST (`models/fxcmv1.cpp`). 1 = 4 history bits in the match length context; 2 = RATA's 4th StateMap (+2 fxcm outputs, +16 input lanes).
 
-### P1 — word residual (30 MB) — running, run 45681545454
+### P1 — word residual (30 MB) — done, run 45681545454
+Result: loses everywhere. Best is BEST5 + LR0 −400 = 4,934,054 (+3 vs BEST5); LR0 −200 W1 +27, LR0 −200 +51, CELLLOG 21 +68, W2 +128, LR0 0 +436. On BEST2: LR0 0 +436, LR0 −200 +52. The more negative the gate start, the closer to ±0: the stage only costs.
 #0 BEST5+WRES · #1 LR0 −200 · #2 LR0 −400 · #3 LR0 −200 W2 · #4 LR0 −200 W1 · #5 BEST2+WRES · #6 BEST2+WRES LR0 −200 · #7 BEST5 LR0 −200 CELLLOG 21. Compare against BEST5 4,934,051 and BEST2 4,936,732.
 
-### P2 — word GRU (30 MB) — running, run 45682779594
+### P2 — word GRU (30 MB) — done, run 45682779594
+Result: ±0. BEST5 + WGRU 4,934,049 (−2), BEST2 + WGRU 4,936,729 (−3); with WRES(LR0 −200) on BEST5 +48, with WRES on BEST2 +432.
 #0 BEST5+WGRU · #1 BEST2+WGRU · #2 BEST5+WGRU+WRES(LR0 −200) · #3 BEST2+WGRU+WRES.
 
-### P3 — MATCHTRUST (30 MB) — running, run 45683305363
+### P3 — MATCHTRUST (30 MB) — done, run 45683305363
+Result: MTRUST1 on BEST5 = 4,934,027 (−24), on BEST2 4,936,639 (−93): a small gain, mostly absorbed by ONS, under the 150 B bar. MTRUST2 (#1 BEST5, #3 BEST2): runner died, no artifact (likely out of memory; +16 input lanes).
 #0 BEST5+MTRUST1 · #1 BEST5+MTRUST2 · #2 BEST2+MTRUST1 · #3 BEST2+MTRUST2.
 
-### P4 — combination round (30 MB) — staged, after P1–P3
+### P4 — combination round (30 MB) — skipped (no winner)
+No port setting beat BEST5 by 150 B (best: MTRUST1 −24), so per the rule nothing ran.
 Rule: the winners are each port's best setting at least 150 B under BEST5. Run every pair and the triple of winners on BEST5, each winner's best setting with one step either side (for example LR0 ±200, or MTRUST 1 vs 2 if both won), and each winner on BEST5 + MA1 + KA900. At most 20 jobs. If nothing beats BEST5 by 150 B, run nothing, and say in `CMX-RESEARCH.md` that the port overlaps with ONS.
 
-### P5 — the port stack at length (40 MB) — staged, after P4
+### P5 — the port stack at length (40 MB) — skipped (no P4 stack)
+Port-track summary is in `CMX-RESEARCH.md`.
 Rule: the best P4 stack and BEST5 at 40 MB (BEST5's 40 MB number may already be known from batch 15), plus the best stack at 20 MB. That's 3 jobs. Then write a port-track summary in `CMX-RESEARCH.md`: each port's gain on BEST2 vs on BEST5 (overlap with ONS), the stack, and its growth with length.
 
 Ports that still need code (the scheduled runner skips them): cmix-views' view experts (4 online output heads on sparse transformer-block activations, `tf1/opt/view_expert.h`), RATA's MorphologyMatch, Scr2Match and CausalDonor, and cmix-lex-transformer's larger PPMd (memory).
